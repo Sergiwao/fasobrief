@@ -37,7 +37,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 4. Langue
   const savedLang = localStorage.getItem('fasobrief_lang') || 'fr';
-  document.getElementById('langSelect').value = savedLang;
+  const langSel = document.getElementById('langSelect');
+  if (langSel) langSel.value = savedLang;
+  const activePill = document.getElementById('btnLang' + savedLang.charAt(0).toUpperCase() + savedLang.slice(1));
+  if (activePill) activePill.classList.add('active');
   setLanguage(savedLang);
 
   // 5. Écouteurs WebSocket
@@ -93,7 +96,8 @@ function setupWebSocketListeners() {
 
 async function promptDemoLogin(accountKey) {
   const acc = ACCOUNTS[accountKey] || ACCOUNTS['usr_dir_01'];
-  document.getElementById('demoAccountSelect').value = accountKey;
+  const select = document.getElementById('demoAccountSelect');
+  if (select) select.value = accountKey;
 
   try {
     const res = await FasoApi.loginStep1(acc.matricule, acc.password);
@@ -148,7 +152,37 @@ async function submit2FALogin() {
   }
 }
 
+function toggleHeaderMenu() {
+  const menu = document.getElementById('headerDropdownMenu');
+  if (menu) {
+    menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  }
+}
+
+function closeHeaderMenu() {
+  const menu = document.getElementById('headerDropdownMenu');
+  if (menu) menu.style.display = 'none';
+}
+
+function selectLanguage(lang) {
+  setLanguage(lang);
+  document.querySelectorAll('.btn-lang-pill').forEach(b => b.classList.remove('active'));
+  const activeBtn = document.getElementById(`btnLang${lang.charAt(0).toUpperCase() + lang.slice(1)}`);
+  if (activeBtn) activeBtn.classList.add('active');
+  closeHeaderMenu();
+}
+
+// Ferme le menu déroulant au clic extérieur
+window.addEventListener('click', (e) => {
+  const badge = document.querySelector('.header-user-badge');
+  const menu = document.getElementById('headerDropdownMenu');
+  if (badge && menu && !badge.contains(e.target) && !menu.contains(e.target)) {
+    menu.style.display = 'none';
+  }
+});
+
 async function switchDemoAccount(userId) {
+  closeHeaderMenu();
   FasoApi.clearSession();
   document.getElementById('revocationAlertBanner').style.display = 'none';
   document.querySelector('.app-container').style.opacity = '1';
@@ -157,6 +191,7 @@ async function switchDemoAccount(userId) {
 }
 
 function logout() {
+  closeHeaderMenu();
   FasoApi.clearSession();
   window.location.reload();
 }
@@ -168,6 +203,11 @@ function updateUserProfile(user) {
 
   const initials = user.fullName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
   document.getElementById('userAvatar').textContent = initials;
+
+  const headerAvatar = document.getElementById('headerUserAvatar');
+  if (headerAvatar) headerAvatar.textContent = initials;
+  const headerName = document.getElementById('headerUserName');
+  if (headerName) headerName.textContent = user.fullName.split(' ')[0] + ' ' + (user.fullName.split(' ')[1] ? user.fullName.split(' ')[1].charAt(0) + '.' : '');
 }
 
 /**
@@ -446,8 +486,9 @@ async function acknowledgeInstruction(instructionId) {
 async function loadInstructionsDashboard() {
   try {
     const res = await FasoApi.getInstructionsDashboard();
-    const tbody = document.getElementById('instructionsTableBody');
-    tbody.innerHTML = '';
+    const container = document.getElementById('instructionsCardsList');
+    if (!container) return;
+    container.innerHTML = '';
 
     let total = res.dashboard.length;
     let totalAckCount = 0;
@@ -464,31 +505,43 @@ async function loadInstructionsDashboard() {
         inst.tag || ''
       );
 
-      const tr = document.createElement('tr');
       const isAckedByMe = inst.acknowledgements && inst.acknowledgements.some(a => a.user_id === FasoApi.currentUser.id);
 
       const acksListHtml = inst.acknowledgements && inst.acknowledgements.length > 0
-        ? inst.acknowledgements.map(a => `<span style="display:inline-block; font-size:11px; background:var(--status-success-bg); color:var(--status-success); padding:2px 6px; border-radius:4px; margin:2px;">${a.full_name} (${new Date(a.acknowledged_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})})</span>`).join(' ')
-        : '<span style="color:var(--text-secondary); font-size:11px;">En attente</span>';
+        ? inst.acknowledgements.map(a => `<span class="ack-chip">${escapeHtml(a.full_name)} (${new Date(a.acknowledged_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})})</span>`).join(' ')
+        : '<span style="color:var(--text-secondary); font-size:11.5px;">Aucun accusé pour l\'instant</span>';
 
-      tr.innerHTML = `
-        <td style="font-family:monospace; font-weight:600; color:var(--wa-green);">${inst.instruction_ref}</td>
-        <td style="font-weight:600;">${decryptedTitle}</td>
-        <td>${inst.creator_name}</td>
-        <td style="font-size:12px;">${inst.deadline ? new Date(inst.deadline).toLocaleString() : 'Permanente'}</td>
-        <td>
-          <span style="font-size:11px; font-weight:600; padding:3px 8px; border-radius:4px; background:${inst.status === 'TRAITE' ? 'var(--status-success-bg)' : 'var(--status-pending-bg)'}; color:${inst.status === 'TRAITE' ? 'var(--status-success)' : 'var(--status-pending)'}">
+      const card = document.createElement('div');
+      card.className = 'instruction-card';
+      card.innerHTML = `
+        <div class="inst-card-top">
+          <span class="inst-ref-badge">${inst.instruction_ref}</span>
+          <span class="inst-status-pill ${inst.status === 'TRAITE' ? 'success' : 'pending'}">
             ${inst.status} (${inst.ack_count || 0}/${inst.total_recipients || 1})
           </span>
-        </td>
-        <td>${acksListHtml}</td>
-        <td>
-          <button class="btn-ack-clean ${isAckedByMe ? 'done' : ''}" style="font-size:11px; padding:4px 8px;" onclick="acknowledgeInstruction('${inst.id}')">
-            ${isAckedByMe ? 'Acquitté' : 'Accuser réception'}
+        </div>
+        <div class="inst-card-title">${escapeHtml(decryptedTitle)}</div>
+        <div class="inst-card-info-grid">
+          <div class="inst-info-item">
+            <span class="inst-info-label">Émetteur</span>
+            <span class="inst-info-val">${escapeHtml(inst.creator_name)}</span>
+          </div>
+          <div class="inst-info-item">
+            <span class="inst-info-label">Échéance</span>
+            <span class="inst-info-val">${inst.deadline ? new Date(inst.deadline).toLocaleString() : 'Sans délai'}</span>
+          </div>
+        </div>
+        <div class="inst-card-acks">
+          <span class="inst-info-label">Prises de connaissance :</span>
+          <div class="acks-chips">${acksListHtml}</div>
+        </div>
+        <div class="inst-card-actions">
+          <button class="btn-ack-clean ${isAckedByMe ? 'done' : ''}" onclick="acknowledgeInstruction('${inst.id}')">
+            ${isAckedByMe ? 'Accusé formel signé ✓' : 'Accuser réception formelle'}
           </button>
-        </td>
+        </div>
       `;
-      tbody.appendChild(tr);
+      container.appendChild(card);
     }
 
     document.getElementById('kpiTotalInstructions').textContent = total;
@@ -502,30 +555,36 @@ async function loadInstructionsDashboard() {
 async function loadSecurityView() {
   try {
     const res = await FasoApi.getAdminUsers();
-    const tbody = document.getElementById('usersAdminTableBody');
-    tbody.innerHTML = '';
+    const container = document.getElementById('usersCardsList');
+    if (!container) return;
+    container.innerHTML = '';
 
     res.users.forEach(u => {
-      const tr = document.createElement('tr');
+      const card = document.createElement('div');
       const isRevoked = u.is_revoked === 1;
+      card.className = `agent-security-card ${isRevoked ? 'revoked' : ''}`;
 
-      tr.innerHTML = `
-        <td style="font-family:monospace; font-weight:600;">${u.matricule}</td>
-        <td style="font-weight:600;">${u.full_name}</td>
-        <td><span class="inst-pill">${u.role}</span></td>
-        <td>
-          <span style="font-size:11px; font-weight:700; color:${isRevoked ? 'var(--status-danger)' : 'var(--status-success)'};">
+      const initials = u.full_name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+
+      card.innerHTML = `
+        <div class="agent-card-info">
+          <div class="avatar-sm">${initials}</div>
+          <div class="agent-card-text">
+            <div class="agent-card-name">${escapeHtml(u.full_name)}</div>
+            <div class="agent-card-sub">${u.matricule} • <span class="inst-pill">${u.role}</span></div>
+          </div>
+        </div>
+        <div class="agent-card-action">
+          <span class="agent-status-tag ${isRevoked ? 'tag-revoked' : 'tag-active'}">
             ${isRevoked ? 'RÉVOQUÉ' : 'ACTIF'}
           </span>
-        </td>
-        <td>
-          ${isRevoked
-            ? `<span style="font-size:11px; color:var(--text-secondary);">Accès révoqué</span>`
-            : `<button class="btn-danger" onclick="executeRevocation('${u.id}', '${u.full_name}')">Révoquer</button>`
+          ${!isRevoked
+            ? `<button class="btn-danger" onclick="executeRevocation('${u.id}', '${u.full_name}')">Révoquer</button>`
+            : ''
           }
-        </td>
+        </div>
       `;
-      tbody.appendChild(tr);
+      container.appendChild(card);
     });
   } catch (err) {
     console.error('Erreur sécurité :', err);
@@ -592,20 +651,28 @@ async function inspectServerDatabase() {
 async function loadAuditLogs() {
   try {
     const res = await FasoApi.getAuditLogs();
-    const tbody = document.getElementById('auditTableBody');
-    tbody.innerHTML = '';
+    const container = document.getElementById('auditCardsList');
+    if (!container) return;
+    container.innerHTML = '';
 
     res.logs.forEach(log => {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td style="font-family:monospace; font-size:11px;">#${log.id}</td>
-        <td><strong style="color:var(--wa-green); font-size:12px;">${log.event_type}</strong></td>
-        <td style="font-size:12px;">${log.actor_id || 'Anonyme'}</td>
-        <td style="font-family:monospace; font-size:11px;">${log.ip_address}</td>
-        <td style="font-size:12px;">${log.details}</td>
-        <td style="font-size:11px; color:var(--text-secondary);">${new Date(log.created_at).toLocaleString()}</td>
+      const card = document.createElement('div');
+      card.className = 'audit-card';
+      card.innerHTML = `
+        <div class="audit-card-header">
+          <span class="audit-badge ${log.event_type}">${log.event_type}</span>
+          <span class="audit-id">#${log.id}</span>
+        </div>
+        <div class="audit-card-body">
+          <div class="audit-detail-text">${escapeHtml(log.details)}</div>
+        </div>
+        <div class="audit-card-footer">
+          <span>Acteur : <strong>${escapeHtml(log.actor_id || 'Anonyme')}</strong></span>
+          <span>IP : <code>${log.ip_address}</code></span>
+          <span>${new Date(log.created_at).toLocaleString()}</span>
+        </div>
       `;
-      tbody.appendChild(tr);
+      container.appendChild(card);
     });
   } catch (err) {
     console.error('Erreur audit :', err);

@@ -122,8 +122,8 @@ class FasoCryptoEngine {
 
       return new TextDecoder().decode(decryptedBuffer);
     } catch (err) {
-      console.error('[CRYPTO] Erreur de déchiffrement local :', err);
-      return '[Message chiffré - Échec déchiffrement : clé révoquée ou altération de données]';
+      console.warn('[CRYPTO] Erreur de déchiffrement local :', err);
+      return '[Message sécurisé E2EE]';
     }
   }
 

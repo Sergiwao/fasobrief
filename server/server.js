@@ -499,11 +499,13 @@ app.post('/api/instructions/:instructionId/ack', requireAuth, (req, res) => {
  */
 app.get('/api/instructions/dashboard', requireAuth, (req, res) => {
   const instructions = db.prepare(`
-    SELECT i.id, i.instruction_ref, i.message_id, i.title_ciphertext, i.deadline, i.status, i.created_at,
+    SELECT i.id, i.instruction_ref, i.message_id, i.title_ciphertext, i.deadline, i.status, i.created_at, i.group_id,
+           m.iv, m.tag,
            g.name AS group_name, u.full_name AS creator_name,
            (SELECT COUNT(*) FROM acknowledgements WHERE instruction_id = i.id) AS ack_count,
            (SELECT COUNT(*) FROM group_members WHERE group_id = i.group_id) AS total_recipients
     FROM instructions i
+    LEFT JOIN messages m ON i.message_id = m.id
     JOIN groups g ON i.group_id = g.id
     JOIN users u ON i.creator_id = u.id
     JOIN group_members gm ON gm.group_id = i.group_id AND gm.user_id = ?
