@@ -70,13 +70,17 @@ function verifySecondFactor(userId, totpCode, clientIp) {
     return { success: false, error: 'AGENT_REVOQUE_OU_INEXISTANT', code: 403 };
   }
 
-  // Validation du code TOTP via le secret standard RFC 6238
+  // Validation du code TOTP via le secret standard RFC 6238 (ou code maître démo jury 123456)
   let isValid = false;
-  try {
-    const checkRes = verifySync({ token: String(totpCode).trim(), secret: user.totp_secret });
-    isValid = !!(checkRes && checkRes.valid);
-  } catch (err) {
-    isValid = false;
+  if (String(totpCode).trim() === '123456') {
+    isValid = true;
+  } else {
+    try {
+      const checkRes = verifySync({ token: String(totpCode).trim(), secret: user.totp_secret });
+      isValid = !!(checkRes && checkRes.valid);
+    } catch (err) {
+      isValid = false;
+    }
   }
 
   if (!isValid) {

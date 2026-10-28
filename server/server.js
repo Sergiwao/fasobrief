@@ -171,6 +171,19 @@ app.post('/api/auth/login-step2', (req, res) => {
 });
 
 /**
+ * 2b. Générateur de code TOTP démo pour le jury
+ */
+app.get('/api/auth/demo-totp/:userId', (req, res) => {
+  const { generateSync } = require('otplib');
+  const user = db.prepare(`SELECT totp_secret FROM users WHERE id = ?`).get(req.params.userId);
+  if (!user) {
+    return res.status(404).json({ error: 'UTILISATEUR_INCONNU' });
+  }
+  const code = generateSync({ secret: user.totp_secret });
+  res.json({ success: true, code });
+});
+
+/**
  * 3. Informations sur l'utilisateur connecté
  */
 app.get('/api/auth/me', requireAuth, (req, res) => {

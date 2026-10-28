@@ -1,17 +1,16 @@
 {
-  "name": "faso",
+  "name": "fasobrief",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs"
-  },
+  "description": "FasoBrief - Messagerie Souveraine et Suivi des Instructions Administratives (Burkina Faso)",
+  "main": "server/server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server/server.js",
+    "test": "node tests/run_all_security_tests.js",
+    "seed": "node server/seed.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": ["e2ee", "sovereign", "burkina-faso", "matrix", "olm", "fasobrief"],
+  "author": "FasoBrief Team",
+  "license": "Apache-2.0",
   "type": "commonjs",
   "dependencies": {
     "@matrix-org/olm": "^3.2.15",

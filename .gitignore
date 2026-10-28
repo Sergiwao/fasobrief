@@ -17,8 +17,11 @@ build/
 *.egg-info/
 
 # Databases & local storage
+data/
 *.sqlite
 *.sqlite3
+*.sqlite-shm
+*.sqlite-wal
 *.db
 uploads/
 
