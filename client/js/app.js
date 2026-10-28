@@ -1,8 +1,5 @@
 /**
- * FASOBRIEF - Contrôleur Principal Frontend
- * 
- * Orchestre l'interface utilisateur, la cryptographie E2EE côté client,
- * le suivi des instructions FasoBrief et les épreuves de sécurité pour le jury.
+ * FASOBRIEF - Contrôleur Principal Frontend Mobile-First & WhatsApp Style
  */
 
 let activeGroupId = 'grp_transition_digitale_01';
@@ -18,25 +15,35 @@ const ACCOUNTS = {
 
 document.addEventListener('DOMContentLoaded', async () => {
   console.log('[APP] Démarrage de FasoBrief...');
+  document.body.classList.add('view-chat');
 
-  // 1. Initialiser le thème (défaut : blanc épuré minimaliste)
+  // 1. Animation d'entrée : masque le splash screen après 1.2s
+  setTimeout(() => {
+    const splash = document.getElementById('splashScreen');
+    if (splash) {
+      splash.style.opacity = '0';
+      setTimeout(() => splash.style.display = 'none', 500);
+    }
+  }, 1200);
+
+  // 2. Thème (Clair par défaut)
   const savedTheme = localStorage.getItem('fasobrief_theme');
   if (savedTheme === 'dark') {
     document.body.classList.add('dark-mode');
   }
 
-  // 2. Initialiser le moteur cryptographique local
+  // 3. Moteur cryptographique local
   await window.FasoCrypto.init();
 
-  // 3. Initialiser la langue
+  // 4. Langue
   const savedLang = localStorage.getItem('fasobrief_lang') || 'fr';
   document.getElementById('langSelect').value = savedLang;
   setLanguage(savedLang);
 
-  // 4. Configurer les écouteurs d'événements WebSocket
+  // 5. Écouteurs WebSocket
   setupWebSocketListeners();
 
-  // 4. Vérifier la session active
+  // 6. Session active
   if (FasoApi.token) {
     try {
       const res = await FasoApi.getMe();
@@ -45,7 +52,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       await loadGroups();
       await loadMessages();
     } catch (e) {
-      console.warn('[APP] Session expirée ou révoquée, reconnexion requise.');
+      console.warn('[APP] Reconnexion requise.');
       FasoApi.clearSession();
       promptDemoLogin('usr_dir_01');
     }
@@ -54,9 +61,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 });
 
-/**
- * Configure les écouteurs WebSocket temps réel
- */
 function setupWebSocketListeners() {
   FasoApi.on('NEW_ENCRYPTED_MESSAGE', async (data) => {
     if (data.message && data.message.groupId === activeGroupId) {
@@ -68,11 +72,9 @@ function setupWebSocketListeners() {
   FasoApi.on('NEW_ADMINISTRATIVE_INSTRUCTION', async (data) => {
     await loadMessages();
     await loadInstructionsDashboard();
-    updatePendingBadge();
   });
 
   FasoApi.on('INSTRUCTION_ACKNOWLEDGED', async (data) => {
-    console.log('[WS] Accusé de réception reçu :', data);
     await loadMessages();
     await loadInstructionsDashboard();
   });
@@ -80,19 +82,15 @@ function setupWebSocketListeners() {
   FasoApi.on('ACCOUNT_REVOKED', (data) => {
     document.getElementById('revocationAlertBanner').style.display = 'flex';
     document.getElementById('revocationAlertMsg').textContent = data.reason || 'Votre accès a été révoqué par l\'administration.';
-    document.querySelector('.app-container').style.opacity = '0.4';
+    document.querySelector('.app-container').style.opacity = '0.3';
     document.querySelector('.app-container').style.pointerEvents = 'none';
   });
 
   FasoApi.on('GROUP_KEY_ROTATION_REQUIRED', async (data) => {
-    console.warn(`[SECURITY] Membre révoqué (${data.revokedUserId}). Rotation de clé Megolm en cours...`);
     await FasoCrypto.rotateGroupKey(data.groupId);
   });
 }
 
-/**
- * Déclenche le flux de connexion 2FA pour un compte de démo
- */
 async function promptDemoLogin(accountKey) {
   const acc = ACCOUNTS[accountKey] || ACCOUNTS['usr_dir_01'];
   document.getElementById('demoAccountSelect').value = accountKey;
@@ -106,7 +104,7 @@ async function promptDemoLogin(accountKey) {
         fullName: res.fullName,
         role: res.role
       };
-      document.getElementById('modal2FAUserName').textContent = `${res.fullName} (${res.matricule} - ${res.role})`;
+      document.getElementById('modal2FAUserName').textContent = `${res.fullName} (${res.matricule} • ${res.role})`;
       document.getElementById('modal2FA').style.display = 'flex';
       fillDemoTotp();
     }
@@ -115,9 +113,6 @@ async function promptDemoLogin(accountKey) {
   }
 }
 
-/**
- * Génère automatiquement le code TOTP officiel pour la démo
- */
 async function fillDemoTotp() {
   if (currentPendingLogin && currentPendingLogin.userId) {
     try {
@@ -127,16 +122,11 @@ async function fillDemoTotp() {
         document.getElementById('inputTotpCode').value = data.code;
         return;
       }
-    } catch (e) {
-      console.warn('Fallback code démo');
-    }
+    } catch (e) {}
   }
   document.getElementById('inputTotpCode').value = '123456';
 }
 
-/**
- * Soumet le 2ème facteur TOTP pour finaliser la session
- */
 async function submit2FALogin() {
   const totpCode = document.getElementById('inputTotpCode').value.trim();
   if (!totpCode || !currentPendingLogin) {
@@ -158,9 +148,6 @@ async function submit2FALogin() {
   }
 }
 
-/**
- * Changement rapide de compte de démonstration pour le jury
- */
 async function switchDemoAccount(userId) {
   FasoApi.clearSession();
   document.getElementById('revocationAlertBanner').style.display = 'none';
@@ -177,15 +164,14 @@ function logout() {
 function updateUserProfile(user) {
   if (!user) return;
   document.getElementById('userName').textContent = user.fullName;
-  document.getElementById('userMatricule').textContent = user.matricule;
-  document.getElementById('userRole').textContent = user.role;
+  document.getElementById('userMatricule').textContent = `${user.matricule} • ${user.role}`;
 
   const initials = user.fullName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
   document.getElementById('userAvatar').textContent = initials;
 }
 
 /**
- * Chargement des groupes de l'agent
+ * Chargement des groupes
  */
 async function loadGroups() {
   try {
@@ -199,9 +185,14 @@ async function loadGroups() {
       item.onclick = () => selectGroup(g.id, g.name, g.service_ministry);
 
       item.innerHTML = `
-        <div class="group-prefix">SEC</div>
-        <div>
-          <div class="group-name">${g.name}</div>
+        <div class="group-avatar">
+          <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+        </div>
+        <div class="group-info">
+          <div class="group-top">
+            <span class="group-name">${g.name}</span>
+            <span class="group-time">12:30</span>
+          </div>
           <div class="group-desc">${g.service_ministry}</div>
         </div>
       `;
@@ -215,13 +206,20 @@ async function loadGroups() {
 function selectGroup(groupId, name, ministry) {
   activeGroupId = groupId;
   document.getElementById('activeGroupName').textContent = name;
-  document.getElementById('activeGroupMinistry').textContent = `${ministry} — Canal Chiffré E2EE`;
+  document.getElementById('activeGroupMinistry').textContent = `${ministry} • Canal sécurisé`;
   document.querySelectorAll('.group-item').forEach(el => el.classList.remove('active'));
+
+  // Sur mobile : ouvrir la vue de conversation plein écran
+  document.body.classList.add('mobile-chat-open');
   loadMessages();
 }
 
+function closeMobileChat() {
+  document.body.classList.remove('mobile-chat-open');
+}
+
 /**
- * Chargement et Déchiffrement LOCAL des messages du groupe
+ * Déchiffrement et affichage des messages
  */
 async function loadMessages() {
   try {
@@ -238,14 +236,11 @@ async function loadMessages() {
   }
 }
 
-/**
- * Affiche un message unique en déchiffrant son contenu côté client
- */
 async function renderSingleMessage(msg) {
   const container = document.getElementById('chatMessages');
   const isMe = FasoApi.currentUser && (msg.sender_id === FasoApi.currentUser.id || msg.senderId === FasoApi.currentUser.id);
 
-  // DÉCHIFFREMENT LOCAL DU CIPHERTEXT
+  // Déchiffrement local transparent
   const decryptedText = await FasoCrypto.decryptTextMessage(
     activeGroupId,
     msg.ciphertext,
@@ -257,69 +252,53 @@ async function renderSingleMessage(msg) {
   bubble.className = `message-bubble ${isMe ? 'sent' : 'received'}`;
 
   const senderName = msg.sender_name || msg.senderName || 'Agent';
-  const senderMatricule = msg.sender_matricule || msg.senderMatricule || '';
   const timeStr = new Date(msg.created_at || msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  // Si c'est une instruction administrative FasoBrief
+  // Checkmark WhatsApp SVG (double check)
+  const checkSvg = `<svg style="width:14px;height:14px;fill:#53bdeb;vertical-align:middle;" viewBox="0 0 24 24"><path d="M18 7l-1.41-1.41-6.34 6.34 1.41 1.41L18 7zm4.24-1.41L11.66 16.17 7.41 11.93l-1.41 1.41 5.66 5.66 12-12-1.42-1.41zM.41 13.34l5.66 5.66 1.41-1.41L1.83 11.93.41 13.34z"/></svg>`;
+
   if (msg.message_type === 'INSTRUCTION' || msg.messageType === 'INSTRUCTION') {
     const isAcked = msg.instruction_status === 'TRAITE' || msg.instruction_status === 'PRIS_CONNAISSANCE';
 
     bubble.innerHTML = `
-      <div class="message-meta">
-        <strong>${senderName} (${senderMatricule})</strong> <span>${timeStr}</span>
-      </div>
-      <div class="message-content instruction-card">
-        <div class="instruction-header">
-          <span class="instruction-tag">Instruction Administrative FasoBrief</span>
-          <span class="instruction-ref">${msg.instruction_ref || 'INST-2026'}</span>
+      <div class="message-card instruction-mode">
+        <div class="inst-badge-row">
+          <span class="inst-pill">Instruction officielle</span>
+          <span class="inst-ref">${msg.instruction_ref || 'INST-2026'}</span>
         </div>
-        <div class="instruction-title">${decryptedText}</div>
-        <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;">
-          Échéance : ${msg.deadline ? new Date(msg.deadline).toLocaleString() : 'Sans échéance stricte'}
+        <div class="inst-title">${decryptedText}</div>
+        <div class="inst-deadline">
+          Échéance : ${msg.deadline ? new Date(msg.deadline).toLocaleString() : 'Sans délai strict'}
         </div>
-        <div class="instruction-footer">
-          <span style="color: ${isAcked ? 'var(--status-success-text)' : 'var(--status-pending-text)'}; font-weight: 600;">
-            ${isAcked ? 'Traité / Prise en compte validée' : 'En attente de prise de connaissance'}
+        <div class="inst-action-row">
+          <span style="font-size:11.5px; font-weight:600; color:${isAcked ? 'var(--status-success)' : 'var(--status-pending)'}">
+            ${isAcked ? 'Prise de connaissance validée' : 'En attente de signature'}
           </span>
-          <button class="btn-ack ${isAcked ? 'acknowledged' : ''}" onclick="acknowledgeInstruction('${msg.instruction_id}')">
-            ${isAcked ? 'Prise de connaissance validée' : 'Accuser réception'}
+          <button class="btn-ack-clean ${isAcked ? 'done' : ''}" onclick="acknowledgeInstruction('${msg.instruction_id}')">
+            ${isAcked ? 'Acquitté' : 'Accuser réception'}
           </button>
         </div>
-        <div class="crypto-inspect" onclick="inspectCiphertext('${msg.ciphertext}', '${msg.iv}', '${msg.tag}')">
-          Inspecter le payload chiffré (Preuve E2EE)
-        </div>
+        <span class="message-time">${timeStr} ${isMe ? checkSvg : ''}</span>
       </div>
     `;
   } else if (msg.file_id || msg.fileId) {
-    // Si c'est une pièce jointe chiffrée
     bubble.innerHTML = `
-      <div class="message-meta">
-        <strong>${senderName}</strong> <span>${timeStr}</span>
-      </div>
-      <div class="message-content">
-        <div>
-          <div style="font-weight: 600;">[Fichier chiffré] ${decryptedText}</div>
-          <div style="font-size: 11px; color: var(--text-muted);">AES-256-GCM (${msg.file_size || 0} octets)</div>
-        </div>
-        <button class="btn-secondary" style="margin-top: 8px; width: 100%;" onclick="downloadEncryptedFile('${msg.file_id || msg.fileId}', '${msg.ciphertext}')">
-          Télécharger et déchiffrer
+      <div class="message-card">
+        ${!isMe ? `<div class="message-sender">${senderName}</div>` : ''}
+        <div style="font-weight:600; margin-bottom: 4px;">Document : ${decryptedText}</div>
+        <div style="font-size:11px; color:var(--text-secondary); margin-bottom: 6px;">Pièce jointe sécurisée (${msg.file_size || 0} octets)</div>
+        <button class="btn-secondary" style="width:100%; font-size:12px;" onclick="downloadEncryptedFile('${msg.file_id || msg.fileId}', '${msg.ciphertext}')">
+          Télécharger le document
         </button>
-        <div class="crypto-inspect" onclick="inspectCiphertext('${msg.ciphertext}', '${msg.iv}', '${msg.tag}')">
-          Inspecter le payload chiffré (Preuve E2EE)
-        </div>
+        <span class="message-time">${timeStr} ${isMe ? checkSvg : ''}</span>
       </div>
     `;
   } else {
-    // Message texte standard
     bubble.innerHTML = `
-      <div class="message-meta">
-        <strong>${senderName}</strong> <span>${timeStr}</span>
-      </div>
-      <div class="message-content">
-        ${escapeHtml(decryptedText)}
-        <div class="crypto-inspect" onclick="inspectCiphertext('${msg.ciphertext}', '${msg.iv}', '${msg.tag}')">
-          Inspecter le payload chiffré (Preuve E2EE)
-        </div>
+      <div class="message-card">
+        ${!isMe ? `<div class="message-sender">${senderName}</div>` : ''}
+        <span>${escapeHtml(decryptedText)}</span>
+        <span class="message-time">${timeStr} ${isMe ? checkSvg : ''}</span>
       </div>
     `;
   }
@@ -327,19 +306,13 @@ async function renderSingleMessage(msg) {
   container.appendChild(bubble);
 }
 
-/**
- * Envoi d'un message chiffré
- */
 async function sendTextMessage() {
   const input = document.getElementById('chatInput');
   const text = input.value.trim();
   if (!text) return;
 
   try {
-    // 1. Chiffrement LOCAL par le client
     const encrypted = await FasoCrypto.encryptTextMessage(activeGroupId, text);
-
-    // 2. Transmission du ciphertext au serveur souverain
     await FasoApi.sendEncryptedMessage(activeGroupId, {
       ciphertext: encrypted.ciphertext,
       iv: encrypted.iv,
@@ -351,26 +324,19 @@ async function sendTextMessage() {
     input.value = '';
     await loadMessages();
   } catch (err) {
-    alert(`Erreur d'envoi chiffré : ${err.message}`);
+    alert(`Erreur d'envoi : ${err.message}`);
   }
 }
 
-/**
- * Téléversement d'un fichier chiffré de bout en bout
- */
 async function handleFileUpload(event) {
   const file = event.target.files[0];
   if (!file) return;
 
   try {
     const arrayBuffer = await file.arrayBuffer();
-    // Chiffrement LOCAL du fichier
     const encrypted = await FasoCrypto.encryptFile(arrayBuffer, file.name);
-
-    // Chiffre le nom et les métadonnées
     const metaEncrypted = await FasoCrypto.encryptTextMessage(activeGroupId, file.name);
 
-    // Créer le message parent
     const msgRes = await FasoApi.sendEncryptedMessage(activeGroupId, {
       ciphertext: metaEncrypted.ciphertext,
       iv: metaEncrypted.iv,
@@ -379,7 +345,6 @@ async function handleFileUpload(event) {
       messageType: 'FILE'
     });
 
-    // Upload du blob chiffré opaque
     await FasoApi.uploadEncryptedFile(
       msgRes.message.id,
       encrypted.encryptedBlob,
@@ -390,21 +355,17 @@ async function handleFileUpload(event) {
     event.target.value = '';
     await loadMessages();
   } catch (err) {
-    alert(`Erreur lors du téléversement chiffré : ${err.message}`);
+    alert(`Erreur téléversement : ${err.message}`);
   }
 }
 
-/**
- * Téléchargement et déchiffrement local du fichier
- */
 async function downloadEncryptedFile(fileId, fileMetaCiphertext) {
   try {
     const blob = await FasoApi.downloadEncryptedFile(fileId);
-    // Dans notre démo, le blob est téléchargé directement déchiffrable
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'document_fasobrief_dechiffre.pdf';
+    a.download = 'document_officiel_fasobrief.pdf';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -414,12 +375,9 @@ async function downloadEncryptedFile(fileId, fileMetaCiphertext) {
   }
 }
 
-/**
- * Modal d'Instruction Administrative
- */
 function openInstructionModal() {
   if (FasoApi.currentUser && FasoApi.currentUser.role === 'AGENT') {
-    alert('Règle RBAC : Seuls le Directeur, le Chef de Service ou l\'Administrateur peuvent émettre une instruction officielle.');
+    alert('Règle hiérarchique : Seuls les Directeurs et Chefs de Service émettent des instructions.');
     return;
   }
   document.getElementById('modalInstruction').style.display = 'flex';
@@ -434,15 +392,12 @@ async function submitInstruction() {
   const deadline = document.getElementById('instructionDeadlineInput').value;
 
   if (!title) {
-    alert('Veuillez renseigner un titre ou objet pour l\'instruction.');
+    alert('Veuillez renseigner un objet pour l\'instruction.');
     return;
   }
 
   try {
-    // 1. Chiffrement du titre de l'instruction
     const encrypted = await FasoCrypto.encryptTextMessage(activeGroupId, title);
-
-    // 2. Création du message support chiffré
     const msgRes = await FasoApi.sendEncryptedMessage(activeGroupId, {
       ciphertext: encrypted.ciphertext,
       iv: encrypted.iv,
@@ -451,7 +406,6 @@ async function submitInstruction() {
       messageType: 'INSTRUCTION'
     });
 
-    // 3. Enregistrement de l'instruction FasoBrief
     await FasoApi.createInstruction(
       msgRes.message.id,
       encrypted.ciphertext,
@@ -466,18 +420,14 @@ async function submitInstruction() {
     await loadMessages();
     await loadInstructionsDashboard();
   } catch (err) {
-    alert(`Erreur création instruction : ${err.message}`);
+    alert(`Erreur création : ${err.message}`);
   }
 }
 
-/**
- * Accuser prise de connaissance formelle avec signature cryptographique
- */
 async function acknowledgeInstruction(instructionId) {
   if (!instructionId) return;
 
   try {
-    // Génération de la preuve cryptographique signée
     const signatureProof = await FasoCrypto.generateSignatureProof(
       instructionId,
       FasoApi.currentUser ? FasoApi.currentUser.id : 'anon'
@@ -489,13 +439,10 @@ async function acknowledgeInstruction(instructionId) {
       await loadInstructionsDashboard();
     }
   } catch (err) {
-    alert(`Erreur d'accusé de réception : ${err.message}`);
+    alert(`Erreur accusé : ${err.message}`);
   }
 }
 
-/**
- * Tableau de Bord des Instructions Administratives
- */
 async function loadInstructionsDashboard() {
   try {
     const res = await FasoApi.getInstructionsDashboard();
@@ -510,7 +457,6 @@ async function loadInstructionsDashboard() {
       totalAckCount += inst.ack_count || 0;
       if (inst.status === 'EN_ATTENTE') pendingCount++;
 
-      // Déchiffrement local du titre
       const decryptedTitle = await FasoCrypto.decryptTextMessage(
         inst.group_id || activeGroupId,
         inst.title_ciphertext,
@@ -522,23 +468,23 @@ async function loadInstructionsDashboard() {
       const isAckedByMe = inst.acknowledgements && inst.acknowledgements.some(a => a.user_id === FasoApi.currentUser.id);
 
       const acksListHtml = inst.acknowledgements && inst.acknowledgements.length > 0
-        ? inst.acknowledgements.map(a => `<span style="display:inline-block; font-size:11px; background:var(--status-success-bg); color:var(--status-success-text); border:1px solid var(--status-success-border); padding:2px 6px; border-radius:2px; margin:2px;">[Acquitté] ${a.full_name} (${new Date(a.acknowledged_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})})</span>`).join(' ')
-        : '<span style="color:var(--text-muted); font-size:11px;">Aucun accusé pour l\'instant</span>';
+        ? inst.acknowledgements.map(a => `<span style="display:inline-block; font-size:11px; background:var(--status-success-bg); color:var(--status-success); padding:2px 6px; border-radius:4px; margin:2px;">${a.full_name} (${new Date(a.acknowledged_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})})</span>`).join(' ')
+        : '<span style="color:var(--text-secondary); font-size:11px;">En attente</span>';
 
       tr.innerHTML = `
-        <td style="font-family:monospace; font-weight:600; color:var(--gov-green);">${inst.instruction_ref}</td>
+        <td style="font-family:monospace; font-weight:600; color:var(--wa-green);">${inst.instruction_ref}</td>
         <td style="font-weight:600;">${decryptedTitle}</td>
         <td>${inst.creator_name}</td>
         <td style="font-size:12px;">${inst.deadline ? new Date(inst.deadline).toLocaleString() : 'Permanente'}</td>
         <td>
-          <span style="font-size:11px; font-weight:600; padding:2px 6px; border-radius:2px; background:${inst.status === 'TRAITE' ? 'var(--status-success-bg)' : 'var(--status-pending-bg)'}; color:${inst.status === 'TRAITE' ? 'var(--status-success-text)' : 'var(--status-pending-text)'}; border:1px solid ${inst.status === 'TRAITE' ? 'var(--status-success-border)' : 'var(--status-pending-border)'};">
+          <span style="font-size:11px; font-weight:600; padding:3px 8px; border-radius:4px; background:${inst.status === 'TRAITE' ? 'var(--status-success-bg)' : 'var(--status-pending-bg)'}; color:${inst.status === 'TRAITE' ? 'var(--status-success)' : 'var(--status-pending)'}">
             ${inst.status} (${inst.ack_count || 0}/${inst.total_recipients || 1})
           </span>
         </td>
         <td>${acksListHtml}</td>
         <td>
-          <button class="btn-ack ${isAckedByMe ? 'acknowledged' : ''}" style="font-size:11px; padding:4px 8px;" onclick="acknowledgeInstruction('${inst.id}')">
-            ${isAckedByMe ? 'Pris en compte' : 'Accuser réception'}
+          <button class="btn-ack-clean ${isAckedByMe ? 'done' : ''}" style="font-size:11px; padding:4px 8px;" onclick="acknowledgeInstruction('${inst.id}')">
+            ${isAckedByMe ? 'Acquitté' : 'Accuser réception'}
           </button>
         </td>
       `;
@@ -549,13 +495,10 @@ async function loadInstructionsDashboard() {
     document.getElementById('kpiPendingInstructions').textContent = pendingCount;
     document.getElementById('kpiAckRate').textContent = total > 0 ? `${Math.round((totalAckCount / (total * 2)) * 100)}%` : '0%';
   } catch (err) {
-    console.error('Erreur chargement dashboard :', err);
+    console.error('Erreur dashboard :', err);
   }
 }
 
-/**
- * Console Sécurité & Administration
- */
 async function loadSecurityView() {
   try {
     const res = await FasoApi.getAdminUsers();
@@ -569,49 +512,42 @@ async function loadSecurityView() {
       tr.innerHTML = `
         <td style="font-family:monospace; font-weight:600;">${u.matricule}</td>
         <td style="font-weight:600;">${u.full_name}</td>
-        <td style="font-size:12px; color:var(--text-muted);">${u.service_ministry}</td>
-        <td><span class="brand-badge">${u.role}</span></td>
+        <td><span class="inst-pill">${u.role}</span></td>
         <td>
-          <span style="font-size:11px; font-weight:700; color:${isRevoked ? 'var(--status-danger-text)' : 'var(--status-success-text)'};">
-            ${isRevoked ? 'RÉVOQUÉ' : 'EN SERVICE'}
+          <span style="font-size:11px; font-weight:700; color:${isRevoked ? 'var(--status-danger)' : 'var(--status-success)'};">
+            ${isRevoked ? 'RÉVOQUÉ' : 'ACTIF'}
           </span>
         </td>
         <td>
           ${isRevoked
-            ? `<span style="font-size:11px; color:var(--text-dim);">Accès déjà révoqué</span>`
-            : `<button class="btn-danger" onclick="executeRevocation('${u.id}', '${u.full_name}')">Révoquer l'accès</button>`
+            ? `<span style="font-size:11px; color:var(--text-secondary);">Accès révoqué</span>`
+            : `<button class="btn-danger" onclick="executeRevocation('${u.id}', '${u.full_name}')">Révoquer</button>`
           }
         </td>
       `;
       tbody.appendChild(tr);
     });
   } catch (err) {
-    console.error('Erreur chargement utilisateurs admin :', err);
+    console.error('Erreur sécurité :', err);
   }
 }
 
-/**
- * Exécute la révocation immédiate d'un agent (Épreuve en direct)
- */
 async function executeRevocation(userId, fullName) {
-  const reason = prompt(`Motif officiel de la révocation immédiate de ${fullName} :`, 'Perte de terminal / Départ de poste');
+  const reason = prompt(`Motif officiel de révocation de ${fullName} :`, 'Départ de poste / Perte de terminal');
   if (!reason) return;
 
   try {
     const res = await FasoApi.revokeAgent(userId, reason);
     if (res.success) {
-      alert(`✅ L'agent ${fullName} a été immédiatement révoqué sur tous ses appareils.`);
+      alert(`L'agent ${fullName} a été immédiatement révoqué.`);
       await loadSecurityView();
       await loadAuditLogs();
     }
   } catch (err) {
-    alert(`Erreur de révocation : ${err.message}`);
+    alert(`Erreur : ${err.message}`);
   }
 }
 
-/**
- * Épreuve 1 : Simulation du Test d'Intrus
- */
 async function simulateIntruderTest() {
   const out = document.getElementById('securityProofOutput');
   const code = document.getElementById('securityProofCode');
@@ -621,24 +557,15 @@ async function simulateIntruderTest() {
     const res = await fetch('/api/auth/login-step1', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ matricule: 'INTRUS_HACKER_007', password: 'AttaqueDictionnaire' })
+      body: JSON.stringify({ matricule: 'INTRUS_HACKER_007', password: '***' })
     });
     const data = await res.json();
-
-    code.textContent = `[TEST D'INTRUSION EN DIRECT]\n` +
-      `Cible : POST /api/auth/login-step1\n` +
-      `Payload : { matricule: "INTRUS_HACKER_007", password: "***" }\n` +
-      `Réponse HTTP : ${res.status} ${res.statusText}\n` +
-      `Corps de rejet : ${JSON.stringify(data, null, 2)}\n\n` +
-      `RÉSULTAT DU CONTRÔLE : Intrus rejeté formellement. Événement INTRUSION_ATTEMPT consigné dans audit_logs.`;
+    code.textContent = `[RÉPONSE DU CONTRÔLE D'INTRUSION]\nStatut HTTP : ${res.status} Rejeté\nMessage : ${JSON.stringify(data, null, 2)}\n\nÉvénement consigné dans le journal d'audit officiel.`;
   } catch (err) {
-    code.textContent = `Erreur test : ${err.message}`;
+    code.textContent = `Erreur : ${err.message}`;
   }
 }
 
-/**
- * Épreuve 2 : Inspection de la Base SQL (Zéro Clair)
- */
 async function inspectServerDatabase() {
   const out = document.getElementById('securityProofOutput');
   const code = document.getElementById('securityProofCode');
@@ -649,28 +576,19 @@ async function inspectServerDatabase() {
       headers: { 'Authorization': `Bearer ${FasoApi.token}` }
     });
     const data = await res.json();
-
     const sample = (data.messages || []).slice(0, 3).map(m => ({
       id: m.id,
-      sender_matricule: m.sender_matricule,
-      ciphertext: m.ciphertext.substring(0, 48) + '... [BLOB CHIFFRÉ]',
+      sender: m.sender_matricule,
+      ciphertext: m.ciphertext.substring(0, 42) + '... [CHIFFRÉ]',
       iv: m.iv,
-      tag: m.tag,
-      ephemeral_key: m.ephemeral_key
+      tag: m.tag
     }));
-
-    code.textContent = `[INSPECTION DIRECTE DU SERVEUR - TABLE SQL 'messages']\n` +
-      `Requête : SELECT id, sender_id, ciphertext, iv, tag FROM messages WHERE group_id = '${activeGroupId}';\n\n` +
-      JSON.stringify(sample, null, 2) + `\n\n` +
-      `PREUVE TECHNIQUE : Aucun message en clair n'existe sur le serveur. Seuls des ciphertexts cryptographiques sont stockés.`;
+    code.textContent = `[DONNÉES BRUTES SUR LE SERVEUR - TABLE SQL 'messages']\n` + JSON.stringify(sample, null, 2);
   } catch (err) {
-    code.textContent = `Erreur inspection : ${err.message}`;
+    code.textContent = `Erreur : ${err.message}`;
   }
 }
 
-/**
- * Chargement du Journal d'Audit
- */
 async function loadAuditLogs() {
   try {
     const res = await FasoApi.getAuditLogs();
@@ -681,72 +599,88 @@ async function loadAuditLogs() {
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td style="font-family:monospace; font-size:11px;">#${log.id}</td>
-        <td><strong style="color:var(--faso-gold); font-size:12px;">${log.event_type}</strong></td>
-        <td style="font-size:12px;">${log.actor_id || 'Système / Anonyme'}</td>
+        <td><strong style="color:var(--wa-green); font-size:12px;">${log.event_type}</strong></td>
+        <td style="font-size:12px;">${log.actor_id || 'Anonyme'}</td>
         <td style="font-family:monospace; font-size:11px;">${log.ip_address}</td>
         <td style="font-size:12px;">${log.details}</td>
-        <td style="font-size:11px; color:var(--text-muted);">${new Date(log.created_at).toLocaleString()}</td>
+        <td style="font-size:11px; color:var(--text-secondary);">${new Date(log.created_at).toLocaleString()}</td>
       `;
       tbody.appendChild(tr);
     });
   } catch (err) {
-    console.error('Erreur chargement logs audit :', err);
+    console.error('Erreur audit :', err);
   }
 }
 
-function inspectCiphertext(ciphertext, iv, tag) {
-  document.getElementById('ciphertextDisplay').textContent =
-    `CIPHERTEXT (AES-256-GCM / Megolm) :\n${ciphertext}\n\nIV (Vecteur d'initialisation 96-bit) :\n${iv}\n\nTAG MAC (Preuve d'intégrité 128-bit) :\n${tag}`;
-  document.getElementById('modalCiphertext').style.display = 'flex';
-}
-
 function switchView(viewName) {
+  // Toggle classe vue sur le body
+  if (viewName === 'chat') {
+    document.body.classList.add('view-chat');
+  } else {
+    document.body.classList.remove('view-chat');
+    document.body.classList.remove('mobile-chat-open');
+  }
+
+  // Masque toutes les vues
   document.getElementById('viewChat').style.display = viewName === 'chat' ? 'flex' : 'none';
   document.getElementById('viewInstructions').style.display = viewName === 'instructions' ? 'block' : 'none';
   document.getElementById('viewSecurity').style.display = viewName === 'security' ? 'block' : 'none';
   document.getElementById('viewAudit').style.display = viewName === 'audit' ? 'block' : 'none';
 
-  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-  if (viewName === 'chat') document.getElementById('tabChat').classList.add('active');
+  // Synchronise onglets desktop
+  document.querySelectorAll('.nav-tab-btn').forEach(el => el.classList.remove('active'));
+  if (viewName === 'chat') {
+    const btn = document.getElementById('tabChatDesktop');
+    if (btn) btn.classList.add('active');
+  }
   if (viewName === 'instructions') {
-    document.getElementById('tabInstructions').classList.add('active');
+    const btn = document.getElementById('tabInstDesktop');
+    if (btn) btn.classList.add('active');
     loadInstructionsDashboard();
   }
   if (viewName === 'security') {
-    document.getElementById('tabSecurity').classList.add('active');
+    const btn = document.getElementById('tabSecDesktop');
+    if (btn) btn.classList.add('active');
     loadSecurityView();
   }
   if (viewName === 'audit') {
-    document.getElementById('tabAudit').classList.add('active');
+    const btn = document.getElementById('tabAuditDesktop');
+    if (btn) btn.classList.add('active');
     loadAuditLogs();
   }
-}
 
-function updatePendingBadge() {
-  FasoApi.getInstructionsDashboard().then(res => {
-    const pending = res.dashboard.filter(i => i.status === 'EN_ATTENTE').length;
-    const badge = document.getElementById('pendingInstructionsBadge');
-    if (pending > 0) {
-      badge.textContent = pending;
-      badge.style.display = 'inline-block';
-    } else {
-      badge.style.display = 'none';
-    }
-  }).catch(() => {});
+  // Synchronise bottom nav mobile
+  document.querySelectorAll('.bottom-nav-item').forEach(el => el.classList.remove('active'));
+  if (viewName === 'chat') {
+    const btn = document.getElementById('btnMobileChat');
+    if (btn) btn.classList.add('active');
+  }
+  if (viewName === 'instructions') {
+    const btn = document.getElementById('btnMobileInst');
+    if (btn) btn.classList.add('active');
+  }
+  if (viewName === 'security') {
+    const btn = document.getElementById('btnMobileSec');
+    if (btn) btn.classList.add('active');
+  }
+  if (viewName === 'audit') {
+    const btn = document.getElementById('btnMobileAudit');
+    if (btn) btn.classList.add('active');
+  }
 }
 
 function scrollChatToBottom() {
   const container = document.getElementById('chatMessages');
-  container.scrollTop = container.scrollHeight;
+  if (container) container.scrollTop = container.scrollHeight;
+}
+
+function toggleTheme() {
+  const isDark = document.body.classList.toggle('dark-mode');
+  localStorage.setItem('fasobrief_theme', isDark ? 'dark' : 'light');
 }
 
 function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
-}
-
-function toggleTheme() {
-  const isDark = document.body.classList.toggle('dark-mode');
-  localStorage.setItem('fasobrief_theme', isDark ? 'dark' : 'light');
 }
