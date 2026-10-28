@@ -1,0 +1,34 @@
+# ==============================================================================
+# FASOBRIEF - Orchestration Souveraine en Une Seule Commande
+# Commande de lancement : docker compose up --build
+# Sprint Technique Pré-Hackathon 226 - MTDPCE / DGTD
+# ==============================================================================
+
+version: '3.8'
+
+services:
+  fasobrief:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fasobrief-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - DATABASE_PATH=/app/data/fasobrief.sqlite
+      - JWT_SECRET=fasobrief-secret-token-demonstration-prehackathon-2026
+    volumes:
+      - fasobrief_data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  fasobrief_data:
+    name: fasobrief_data
