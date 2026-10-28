@@ -19,15 +19,21 @@ const ACCOUNTS = {
 document.addEventListener('DOMContentLoaded', async () => {
   console.log('[APP] Démarrage de FasoBrief...');
 
-  // 1. Initialiser le moteur cryptographique local
+  // 1. Initialiser le thème (défaut : blanc épuré minimaliste)
+  const savedTheme = localStorage.getItem('fasobrief_theme');
+  if (savedTheme === 'dark') {
+    document.body.classList.add('dark-mode');
+  }
+
+  // 2. Initialiser le moteur cryptographique local
   await window.FasoCrypto.init();
 
-  // 2. Initialiser la langue
+  // 3. Initialiser la langue
   const savedLang = localStorage.getItem('fasobrief_lang') || 'fr';
   document.getElementById('langSelect').value = savedLang;
   setLanguage(savedLang);
 
-  // 3. Configurer les écouteurs d'événements WebSocket
+  // 4. Configurer les écouteurs d'événements WebSocket
   setupWebSocketListeners();
 
   // 4. Vérifier la session active
@@ -193,7 +199,7 @@ async function loadGroups() {
       item.onclick = () => selectGroup(g.id, g.name, g.service_ministry);
 
       item.innerHTML = `
-        <div class="group-icon">🇧🇫</div>
+        <div class="group-prefix">SEC</div>
         <div>
           <div class="group-name">${g.name}</div>
           <div class="group-desc">${g.service_ministry}</div>
@@ -264,23 +270,23 @@ async function renderSingleMessage(msg) {
       </div>
       <div class="message-content instruction-card">
         <div class="instruction-header">
-          <span class="instruction-tag">⚖️ Instruction Administrative FasoBrief</span>
+          <span class="instruction-tag">Instruction Administrative FasoBrief</span>
           <span class="instruction-ref">${msg.instruction_ref || 'INST-2026'}</span>
         </div>
         <div class="instruction-title">${decryptedText}</div>
         <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;">
-          📅 Échéance : ${msg.deadline ? new Date(msg.deadline).toLocaleString() : 'Sans échéance stricte'}
+          Échéance : ${msg.deadline ? new Date(msg.deadline).toLocaleString() : 'Sans échéance stricte'}
         </div>
         <div class="instruction-footer">
-          <span style="color: ${isAcked ? '#3fb950' : 'var(--status-pending)'}; font-weight: 600;">
-            ${isAcked ? '✓ Traité / Prise en compte' : '⏳ En attente de prise de connaissance'}
+          <span style="color: ${isAcked ? 'var(--status-success-text)' : 'var(--status-pending-text)'}; font-weight: 600;">
+            ${isAcked ? 'Traité / Prise en compte validée' : 'En attente de prise de connaissance'}
           </span>
           <button class="btn-ack ${isAcked ? 'acknowledged' : ''}" onclick="acknowledgeInstruction('${msg.instruction_id}')">
-            ${isAcked ? '✓ Connaissance Prise' : 'Accuser Réception'}
+            ${isAcked ? 'Prise de connaissance validée' : 'Accuser réception'}
           </button>
         </div>
         <div class="crypto-inspect" onclick="inspectCiphertext('${msg.ciphertext}', '${msg.iv}', '${msg.tag}')">
-          🔍 Inspecter Ciphertext (Preuve E2EE)
+          Inspecter le payload chiffré (Preuve E2EE)
         </div>
       </div>
     `;
@@ -291,18 +297,15 @@ async function renderSingleMessage(msg) {
         <strong>${senderName}</strong> <span>${timeStr}</span>
       </div>
       <div class="message-content">
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <span style="font-size: 20px;">📎</span>
-          <div>
-            <div style="font-weight: 600;">${decryptedText}</div>
-            <div style="font-size: 10px; color: var(--text-muted);">Fichier binaire chiffré AES-256-GCM (${msg.file_size || 0} octets)</div>
-          </div>
+        <div>
+          <div style="font-weight: 600;">[Fichier chiffré] ${decryptedText}</div>
+          <div style="font-size: 11px; color: var(--text-muted);">AES-256-GCM (${msg.file_size || 0} octets)</div>
         </div>
         <button class="btn-secondary" style="margin-top: 8px; width: 100%;" onclick="downloadEncryptedFile('${msg.file_id || msg.fileId}', '${msg.ciphertext}')">
-          ⬇️ Télécharger & Déchiffrer Localement
+          Télécharger et déchiffrer
         </button>
         <div class="crypto-inspect" onclick="inspectCiphertext('${msg.ciphertext}', '${msg.iv}', '${msg.tag}')">
-          🔍 Inspecter Ciphertext (Preuve E2EE)
+          Inspecter le payload chiffré (Preuve E2EE)
         </div>
       </div>
     `;
@@ -315,7 +318,7 @@ async function renderSingleMessage(msg) {
       <div class="message-content">
         ${escapeHtml(decryptedText)}
         <div class="crypto-inspect" onclick="inspectCiphertext('${msg.ciphertext}', '${msg.iv}', '${msg.tag}')">
-          🔍 Inspecter Ciphertext (Preuve E2EE)
+          Inspecter le payload chiffré (Preuve E2EE)
         </div>
       </div>
     `;
@@ -519,23 +522,23 @@ async function loadInstructionsDashboard() {
       const isAckedByMe = inst.acknowledgements && inst.acknowledgements.some(a => a.user_id === FasoApi.currentUser.id);
 
       const acksListHtml = inst.acknowledgements && inst.acknowledgements.length > 0
-        ? inst.acknowledgements.map(a => `<span style="display:inline-block; font-size:11px; background:rgba(35,134,54,0.15); color:#3fb950; padding:2px 6px; border-radius:3px; margin:2px;">✓ ${a.full_name} (${new Date(a.acknowledged_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})})</span>`).join(' ')
+        ? inst.acknowledgements.map(a => `<span style="display:inline-block; font-size:11px; background:var(--status-success-bg); color:var(--status-success-text); border:1px solid var(--status-success-border); padding:2px 6px; border-radius:2px; margin:2px;">[Acquitté] ${a.full_name} (${new Date(a.acknowledged_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})})</span>`).join(' ')
         : '<span style="color:var(--text-muted); font-size:11px;">Aucun accusé pour l\'instant</span>';
 
       tr.innerHTML = `
-        <td style="font-family:monospace; font-weight:600; color:var(--faso-gold);">${inst.instruction_ref}</td>
+        <td style="font-family:monospace; font-weight:600; color:var(--gov-green);">${inst.instruction_ref}</td>
         <td style="font-weight:600;">${decryptedTitle}</td>
         <td>${inst.creator_name}</td>
         <td style="font-size:12px;">${inst.deadline ? new Date(inst.deadline).toLocaleString() : 'Permanente'}</td>
         <td>
-          <span style="font-size:11px; font-weight:600; padding:3px 8px; border-radius:4px; background:${inst.status === 'TRAITE' ? 'rgba(35,134,54,0.2)' : 'rgba(210,153,34,0.2)'}; color:${inst.status === 'TRAITE' ? '#3fb950' : 'var(--status-pending)'}">
+          <span style="font-size:11px; font-weight:600; padding:2px 6px; border-radius:2px; background:${inst.status === 'TRAITE' ? 'var(--status-success-bg)' : 'var(--status-pending-bg)'}; color:${inst.status === 'TRAITE' ? 'var(--status-success-text)' : 'var(--status-pending-text)'}; border:1px solid ${inst.status === 'TRAITE' ? 'var(--status-success-border)' : 'var(--status-pending-border)'};">
             ${inst.status} (${inst.ack_count || 0}/${inst.total_recipients || 1})
           </span>
         </td>
         <td>${acksListHtml}</td>
         <td>
-          <button class="btn-ack ${isAckedByMe ? 'acknowledged' : ''}" style="font-size:11px; padding:4px 10px;" onclick="acknowledgeInstruction('${inst.id}')">
-            ${isAckedByMe ? '✓ Pris en compte' : 'Accuser réception'}
+          <button class="btn-ack ${isAckedByMe ? 'acknowledged' : ''}" style="font-size:11px; padding:4px 8px;" onclick="acknowledgeInstruction('${inst.id}')">
+            ${isAckedByMe ? 'Pris en compte' : 'Accuser réception'}
           </button>
         </td>
       `;
@@ -569,14 +572,14 @@ async function loadSecurityView() {
         <td style="font-size:12px; color:var(--text-muted);">${u.service_ministry}</td>
         <td><span class="brand-badge">${u.role}</span></td>
         <td>
-          <span style="font-size:11px; font-weight:700; color:${isRevoked ? 'var(--status-revoked)' : '#3fb950'};">
-            ${isRevoked ? '● RÉVOQUÉ' : '● EN SERVICE'}
+          <span style="font-size:11px; font-weight:700; color:${isRevoked ? 'var(--status-danger-text)' : 'var(--status-success-text)'};">
+            ${isRevoked ? 'RÉVOQUÉ' : 'EN SERVICE'}
           </span>
         </td>
         <td>
           ${isRevoked
             ? `<span style="font-size:11px; color:var(--text-dim);">Accès déjà révoqué</span>`
-            : `<button class="btn-danger" onclick="executeRevocation('${u.id}', '${u.full_name}')">🚫 Révoquer Immédiatement</button>`
+            : `<button class="btn-danger" onclick="executeRevocation('${u.id}', '${u.full_name}')">Révoquer l'accès</button>`
           }
         </td>
       `;
@@ -741,4 +744,9 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+function toggleTheme() {
+  const isDark = document.body.classList.toggle('dark-mode');
+  localStorage.setItem('fasobrief_theme', isDark ? 'dark' : 'light');
 }
