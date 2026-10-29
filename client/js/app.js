@@ -96,8 +96,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     }, 120);
   }
 
-  // 4. Écouteurs globaux (WebSocket, visibilité d'onglet, fermeture menus/modales)
+  // 4. Écouteurs globaux (WebSocket, visibilité d'onglet, fermeture menus/modales, gestes fluides 1:1)
   setupGlobalListeners();
+  setupFluidSheetGestures();
+  setupFluidMobileChatSwipe();
 
   // 5. Charger la configuration d'authentification (détection Mode Démo Jury)
   try {
@@ -1299,6 +1301,12 @@ function updateMessageStatusDom(messageId, deliveryStatus) {
   }
 }
 
+function autoGrowComposer(el) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = `${Math.min(el.scrollHeight, 116)}px`;
+}
+
 function handleComposerKeydown(event) {
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault();
@@ -1313,6 +1321,8 @@ async function submitChatMessage() {
   if (!plainText || !groupId) return;
 
   input.value = '';
+  input.style.height = '';
+  triggerHaptic(6);
   const clientMsgId = `cmsg_${Date.now()}_${FasoCrypto._generateRandomHex(6)}`;
   await sendTextWithClientId(groupId, plainText, clientMsgId);
 }
@@ -2389,6 +2399,7 @@ async function confirmInstructionReceiptSigned(instructionId, version) {
   try {
     const sig = FasoCrypto.signInstructionAck(instructionId, version, FasoApi.currentUser.id);
     await FasoApi.acknowledgeInstruction(instructionId, sig);
+    triggerHaptic([8, 28, 10]);
     showToast('Réception confirmée avec signature Ed25519 vérifiée.', 'success');
     await openInstructionDetail(instructionId, { skipMarkViewed: true });
     if (AppState.activeGroupId) await loadActiveConversationMessages({ preserveScroll: true });
@@ -2781,15 +2792,221 @@ async function runBlindServerInspection() {
 }
 
 // ============================================================================
-// UTILITAIRES D'INTERFACE (MODALES, TOASTS, FORMATAGE, ÉCHAPPEMENT XSS)
+// MOTEUR D'INTERACTION FLUIDE APPLE (RESSORTS, INERTIE, GESTES 1:1 & MODALES)
 // ============================================================================
+const ActiveSprings = new Map();
+
+function prefersReducedMotion() {
+  return Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+}
+
+/**
+ * §9 Résistance progressive Apple au dépassement de bord (rubber-banding, c = 0.55)
+ */
+function rubberband(overshoot, dimension, constant = 0.55) {
+  const dim = Math.max(1, dimension);
+  return (overshoot * dim * constant) / (dim + constant * Math.abs(overshoot));
+}
+
+/**
+ * §6 Projection inertielle exponentielle Apple (d = 0.998 par ms)
+ */
+function projectMomentum(velocityPxPerSec, decelerationRate = 0.998) {
+  return ((velocityPxPerSec / 1000) * decelerationRate) / (1 - decelerationRate);
+}
+
+/**
+ * §13 Retour haptique causal sobre (uniquement sur événement d'engagement, jamais décoratif)
+ */
+function triggerHaptic(pattern = 8) {
+  if (prefersReducedMotion()) return;
+  try {
+    if (navigator && typeof navigator.vibrate === 'function') {
+      navigator.vibrate(pattern);
+    }
+  } catch (_) {}
+}
+
+function cancelSpring(key) {
+  const running = ActiveSprings.get(key);
+  if (running) {
+    cancelAnimationFrame(running.rafId);
+    ActiveSprings.delete(key);
+    return { value: running.value, velocity: running.velocity };
+  }
+  return null;
+}
+
+/**
+ * §3, §4 & §5 Solveur ressort amorti interruptible paramétré par (damping, response)
+ * Conserve la vitesse en cours si relancé en plein mouvement.
+ */
+function animateSpring(key, {
+  from,
+  to,
+  velocity = 0,
+  damping = 1.0,
+  response = 0.32,
+  onUpdate,
+  onComplete
+}) {
+  const prev = cancelSpring(key);
+  if (prefersReducedMotion()) {
+    if (onUpdate) onUpdate(to);
+    if (onComplete) onComplete();
+    return;
+  }
+
+  const state = {
+    value: prev && from === undefined ? prev.value : from,
+    velocity: velocity !== 0 ? velocity : (prev ? prev.velocity : 0),
+    rafId: 0
+  };
+
+  const omega = (2 * Math.PI) / Math.max(0.08, response);
+  const stiffness = omega * omega;
+  const dampingCoeff = 2 * damping * omega;
+  let lastTime = performance.now();
+
+  const step = (now) => {
+    const dt = Math.min(0.032, Math.max(0.001, (now - lastTime) / 1000));
+    lastTime = now;
+
+    // Sous-échantillonnage demi-pas pour stabilité numérique inconditionnelle
+    const subSteps = 2;
+    const h = dt / subSteps;
+    for (let i = 0; i < subSteps; i += 1) {
+      const disp = state.value - to;
+      const accel = -stiffness * disp - dampingCoeff * state.velocity;
+      state.velocity += accel * h;
+      state.value += state.velocity * h;
+    }
+
+    if (Math.abs(to - state.value) < 0.35 && Math.abs(state.velocity) < 8) {
+      ActiveSprings.delete(key);
+      if (onUpdate) onUpdate(to);
+      if (onComplete) onComplete();
+      return;
+    }
+
+    if (onUpdate) onUpdate(state.value);
+    state.rafId = requestAnimationFrame(step);
+  };
+
+  if (onUpdate) onUpdate(state.value);
+  state.rafId = requestAnimationFrame(step);
+  ActiveSprings.set(key, state);
+}
+
+function computePointerVelocity(samples) {
+  if (!samples || samples.length < 2) return 0;
+  const latest = samples[samples.length - 1];
+  let anchor = samples[0];
+  for (let i = samples.length - 2; i >= 0; i -= 1) {
+    if (latest.t - samples[i].t <= 90) {
+      anchor = samples[i];
+    }
+  }
+  const dtSec = (latest.t - anchor.t) / 1000;
+  if (dtSec <= 0.002) return 0;
+  return (latest.pos - anchor.pos) / dtSec;
+}
+
+/**
+ * §12 Profondeur spatiale par recul d'échelle du shell principal lors d'une feuille modale
+ * (0 = repos normal, 1 = feuille pleinement présentée)
+ */
+function syncSheetBackgroundDepth(progress, { immediate = false } = {}) {
+  const shell = document.getElementById('appShell');
+  if (!shell || shell.hidden) return;
+
+  if (prefersReducedMotion() || window.innerWidth >= 640) {
+    cancelSpring('appShellDepth');
+    document.body.classList.remove('sheet-presented');
+    shell.style.transform = '';
+    return;
+  }
+
+  const clamped = Math.max(0, Math.min(1, progress));
+  const applyDepth = (p) => {
+    if (p <= 0.005) {
+      document.body.classList.remove('sheet-presented');
+      shell.style.transform = '';
+    } else {
+      document.body.classList.add('sheet-presented');
+      const scale = 1 - 0.022 * p;
+      const ty = 4 * p;
+      shell.style.transform = `scale(${scale.toFixed(4)}) translate3d(0, ${ty.toFixed(2)}px, 0)`;
+    }
+  };
+
+  if (immediate) {
+    cancelSpring('appShellDepth');
+    applyDepth(clamped);
+    return;
+  }
+
+  const currentPresented = document.body.classList.contains('sheet-presented') ? 1 : 0;
+  animateSpring('appShellDepth', {
+    from: currentPresented,
+    to: clamped,
+    damping: 1.0,
+    response: 0.34,
+    onUpdate: applyDepth
+  });
+}
+
 function openModal(id) {
   const el = document.getElementById(id);
   if (!el) return;
+
+  cancelSpring(`modal:${id}`);
+  delete el.dataset.closing;
+  el.style.opacity = '';
+
+  const card = el.querySelector('.modal-card');
+  if (card) {
+    card.style.transform = '';
+  }
+
   if (el.hidden && document.activeElement instanceof HTMLElement) {
     AppState.modalTriggerStack.push({ id, trigger: document.activeElement });
   }
   el.hidden = false;
+
+  const isMobileSheet = window.innerWidth < 640;
+  syncSheetBackgroundDepth(1);
+
+  if (card && !prefersReducedMotion()) {
+    if (isMobileSheet) {
+      animateSpring(`modal:${id}`, {
+        from: 240,
+        to: 0,
+        damping: 1.0,
+        response: 0.31,
+        onUpdate: (y) => {
+          card.style.transform = `translate3d(0, ${y.toFixed(2)}px, 0)`;
+        },
+        onComplete: () => {
+          card.style.transform = '';
+        }
+      });
+    } else {
+      animateSpring(`modal:${id}`, {
+        from: 0.955,
+        to: 1,
+        damping: 1.0,
+        response: 0.25,
+        onUpdate: (s) => {
+          card.style.transform = `scale(${s.toFixed(4)})`;
+        },
+        onComplete: () => {
+          card.style.transform = '';
+        }
+      });
+    }
+  }
+
   requestAnimationFrame(() => {
     const first = el.querySelector('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])');
     if (first && typeof first.focus === 'function') {
@@ -2798,21 +3015,281 @@ function openModal(id) {
   });
 }
 
-function closeModal(id) {
+function closeModal(id, opts = {}) {
   const el = document.getElementById(id);
-  if (el) el.hidden = true;
+  if (!el) return;
+
+  cancelSpring(`modal:${id}`);
+  const card = el.querySelector('.modal-card');
+
   if (id === 'modalInstructionDetail') {
     AppState.openInstructionId = null;
   }
-  for (let i = AppState.modalTriggerStack.length - 1; i >= 0; i -= 1) {
-    if (AppState.modalTriggerStack[i].id === id) {
-      const { trigger } = AppState.modalTriggerStack.splice(i, 1)[0];
-      if (trigger && typeof trigger.focus === 'function' && trigger.offsetParent !== null) {
-        trigger.focus();
+
+  const restoreTriggerFocus = () => {
+    for (let i = AppState.modalTriggerStack.length - 1; i >= 0; i -= 1) {
+      if (AppState.modalTriggerStack[i].id === id) {
+        const { trigger } = AppState.modalTriggerStack.splice(i, 1)[0];
+        if (trigger && typeof trigger.focus === 'function' && trigger.offsetParent !== null) {
+          trigger.focus();
+        }
+        break;
       }
-      break;
     }
+  };
+
+  const remainingOpen = Array.from(document.querySelectorAll('.modal-backdrop:not([hidden])'))
+    .filter((m) => m.id !== id && !m.dataset.closing);
+  if (remainingOpen.length === 0) {
+    syncSheetBackgroundDepth(0);
   }
+
+  if (opts.fromGesture && card && !prefersReducedMotion()) {
+    el.dataset.closing = '1';
+    const targetY = Math.max(card.offsetHeight || 420, 360);
+    animateSpring(`modal:${id}`, {
+      from: opts.startY || 0,
+      to: targetY,
+      velocity: opts.velocityY || 0,
+      damping: 0.96,
+      response: 0.26,
+      onUpdate: (y) => {
+        card.style.transform = `translate3d(0, ${Math.max(0, y).toFixed(2)}px, 0)`;
+        const fade = Math.max(0, 1 - y / targetY);
+        el.style.opacity = fade.toFixed(3);
+      },
+      onComplete: () => {
+        delete el.dataset.closing;
+        el.hidden = true;
+        el.style.opacity = '';
+        card.style.transform = '';
+        restoreTriggerFocus();
+      }
+    });
+    return;
+  }
+
+  delete el.dataset.closing;
+  el.hidden = true;
+  el.style.opacity = '';
+  if (card) card.style.transform = '';
+  restoreTriggerFocus();
+}
+
+/**
+ * §2, §6 & §9 Feuilles mobiles glissables 1:1 avec Pointer Events, rubber-banding haut
+ * et projection d'inertie à la relâche.
+ */
+function setupFluidSheetGestures() {
+  const zones = document.querySelectorAll('.sheet-drag-zone');
+  zones.forEach((zone) => {
+    const backdrop = zone.closest('.modal-backdrop');
+    const card = zone.closest('.modal-card');
+    if (!backdrop || !card) return;
+
+    let dragState = null;
+
+    zone.addEventListener('pointerdown', (e) => {
+      if (window.innerWidth >= 640 || backdrop.hidden) return;
+      if (e.button !== 0 && e.pointerType === 'mouse') return;
+      if (e.target && e.target.closest('button')) return;
+
+      const interrupted = cancelSpring(`modal:${backdrop.id}`);
+      const baseOffset = interrupted ? Math.max(0, interrupted.value) : 0;
+
+      dragState = {
+        pointerId: e.pointerId,
+        startY: e.clientY - baseOffset,
+        currentY: baseOffset,
+        sheetH: Math.max(260, card.offsetHeight || 400),
+        samples: [{ pos: e.clientY, t: performance.now() }]
+      };
+
+      try {
+        zone.setPointerCapture(e.pointerId);
+      } catch (_) {}
+    });
+
+    zone.addEventListener('pointermove', (e) => {
+      if (!dragState || e.pointerId !== dragState.pointerId) return;
+      const rawDy = e.clientY - dragState.startY;
+      const effectiveY = rawDy < 0
+        ? rubberband(rawDy, dragState.sheetH, 0.42)
+        : rawDy;
+
+      dragState.currentY = effectiveY;
+      dragState.samples.push({ pos: e.clientY, t: performance.now() });
+      if (dragState.samples.length > 5) dragState.samples.shift();
+
+      card.style.transform = `translate3d(0, ${effectiveY.toFixed(2)}px, 0)`;
+
+      const dismissProgress = Math.max(0, Math.min(1, effectiveY / dragState.sheetH));
+      backdrop.style.opacity = (1 - dismissProgress * 0.65).toFixed(3);
+      syncSheetBackgroundDepth(1 - dismissProgress, { immediate: true });
+    });
+
+    const finishDrag = (e, cancelled = false) => {
+      if (!dragState || e.pointerId !== dragState.pointerId) return;
+      const { currentY, sheetH, samples } = dragState;
+      dragState = null;
+
+      try {
+        zone.releasePointerCapture(e.pointerId);
+      } catch (_) {}
+
+      const vy = cancelled ? 0 : computePointerVelocity(samples);
+      const projectedY = currentY + projectMomentum(vy, 0.9965);
+
+      if (!cancelled && currentY > 24 && (projectedY > sheetH * 0.34 || vy > 560)) {
+        triggerHaptic(8);
+        closeModal(backdrop.id, { fromGesture: true, startY: currentY, velocityY: vy });
+      } else {
+        syncSheetBackgroundDepth(1);
+        animateSpring(`modal:${backdrop.id}`, {
+          from: currentY,
+          to: 0,
+          velocity: vy,
+          damping: 0.88,
+          response: 0.32,
+          onUpdate: (y) => {
+            card.style.transform = `translate3d(0, ${y.toFixed(2)}px, 0)`;
+            const p = Math.max(0, Math.min(1, y / sheetH));
+            backdrop.style.opacity = (1 - p * 0.65).toFixed(3);
+          },
+          onComplete: () => {
+            card.style.transform = '';
+            backdrop.style.opacity = '';
+          }
+        });
+      }
+    };
+
+    zone.addEventListener('pointerup', (e) => finishDrag(e, false));
+    zone.addEventListener('pointercancel', (e) => finishDrag(e, true));
+  });
+}
+
+/**
+ * §7 & §10 Geste de retour tactile 1:1 depuis le bord gauche dans une conversation mobile
+ * avec hystérésis directionnelle pour préserver le défilement vertical des messages.
+ */
+function setupFluidMobileChatSwipe() {
+  const viewChat = document.getElementById('viewChat');
+  const msgPane = viewChat && viewChat.querySelector('.messages-pane');
+  const convPane = viewChat && viewChat.querySelector('.conversations-pane');
+  if (!viewChat || !msgPane || !convPane) return;
+
+  let swipe = null;
+
+  viewChat.addEventListener('pointerdown', (e) => {
+    if (window.innerWidth >= 768) return;
+    if (!document.body.classList.contains('mobile-chat-open')) return;
+    if (e.clientX > 28) return;
+
+    cancelSpring('mobileChatSwipe');
+    swipe = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      locked: false,
+      currentX: 0,
+      width: Math.max(280, window.innerWidth),
+      samples: [{ pos: e.clientX, t: performance.now() }]
+    };
+  });
+
+  viewChat.addEventListener('pointermove', (e) => {
+    if (!swipe || e.pointerId !== swipe.pointerId) return;
+    const dx = e.clientX - swipe.startX;
+    const dy = e.clientY - swipe.startY;
+
+    if (!swipe.locked) {
+      if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) {
+        swipe = null;
+        return;
+      }
+      if (dx > 10 && dx > Math.abs(dy) * 1.2) {
+        swipe.locked = true;
+        document.body.classList.add('swiping-chat');
+        try {
+          viewChat.setPointerCapture(e.pointerId);
+        } catch (_) {}
+      } else {
+        return;
+      }
+    }
+
+    const clampedX = Math.max(0, dx);
+    swipe.currentX = clampedX;
+    swipe.samples.push({ pos: e.clientX, t: performance.now() });
+    if (swipe.samples.length > 5) swipe.samples.shift();
+
+    const progress = Math.max(0, Math.min(1, clampedX / swipe.width));
+    msgPane.style.transform = `translate3d(${clampedX.toFixed(1)}px, 0, 0)`;
+    convPane.style.transform = `translate3d(${(-22 * (1 - progress)).toFixed(2)}%, 0, 0)`;
+    convPane.style.opacity = (0.65 + 0.35 * progress).toFixed(3);
+  });
+
+  const endSwipe = (e, cancelled = false) => {
+    if (!swipe || e.pointerId !== swipe.pointerId) return;
+    const state = swipe;
+    swipe = null;
+
+    if (!state.locked) return;
+    try {
+      viewChat.releasePointerCapture(e.pointerId);
+    } catch (_) {}
+
+    const vx = cancelled ? 0 : computePointerVelocity(state.samples);
+    const projectedX = state.currentX + projectMomentum(vx, 0.997);
+    const shouldClose = !cancelled && (projectedX > state.width * 0.35 || vx > 520);
+
+    const cleanupStyles = () => {
+      document.body.classList.remove('swiping-chat');
+      msgPane.style.transform = '';
+      convPane.style.transform = '';
+      convPane.style.opacity = '';
+    };
+
+    if (shouldClose) {
+      triggerHaptic(8);
+      animateSpring('mobileChatSwipe', {
+        from: state.currentX,
+        to: state.width,
+        velocity: vx,
+        damping: 0.96,
+        response: 0.28,
+        onUpdate: (x) => {
+          const p = Math.max(0, Math.min(1, x / state.width));
+          msgPane.style.transform = `translate3d(${Math.max(0, x).toFixed(1)}px, 0, 0)`;
+          convPane.style.transform = `translate3d(${(-22 * (1 - p)).toFixed(2)}%, 0, 0)`;
+          convPane.style.opacity = (0.65 + 0.35 * p).toFixed(3);
+        },
+        onComplete: () => {
+          closeMobileConversation();
+          cleanupStyles();
+        }
+      });
+    } else {
+      animateSpring('mobileChatSwipe', {
+        from: state.currentX,
+        to: 0,
+        velocity: vx,
+        damping: 0.9,
+        response: 0.30,
+        onUpdate: (x) => {
+          const p = Math.max(0, Math.min(1, x / state.width));
+          msgPane.style.transform = `translate3d(${Math.max(0, x).toFixed(1)}px, 0, 0)`;
+          convPane.style.transform = `translate3d(${(-22 * (1 - p)).toFixed(2)}%, 0, 0)`;
+          convPane.style.opacity = (0.65 + 0.35 * p).toFixed(3);
+        },
+        onComplete: cleanupStyles
+      });
+    }
+  };
+
+  viewChat.addEventListener('pointerup', (e) => endSwipe(e, false));
+  viewChat.addEventListener('pointercancel', (e) => endSwipe(e, true));
 }
 
 function openActionConfirmModal({

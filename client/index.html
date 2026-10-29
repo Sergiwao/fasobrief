@@ -437,13 +437,15 @@
                     <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
                   </svg>
                 </button>
-                <textarea id="chatComposerInput" class="composer-input" rows="1" aria-label="Message officiel chiffré" data-i18n="placeholder_message" placeholder="Écrire un message officiel chiffré..." onkeydown="handleComposerKeydown(event)"></textarea>
-                <button type="button" class="composer-send-btn" aria-label="Envoyer le message chiffré" onclick="submitChatMessage()">
-                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-                    <line x1="22" y1="2" x2="11" y2="13"/>
-                    <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-                  </svg>
-                </button>
+                <div class="composer-capsule">
+                  <textarea id="chatComposerInput" class="composer-input" rows="1" aria-label="Message officiel chiffré" data-i18n="placeholder_message" placeholder="Écrire un message officiel chiffré..." oninput="autoGrowComposer(this)" onkeydown="handleComposerKeydown(event)"></textarea>
+                  <button type="button" class="composer-send-btn" aria-label="Envoyer le message chiffré" onclick="submitChatMessage()">
+                    <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true">
+                      <line x1="12" y1="19" x2="12" y2="5"/>
+                      <polyline points="5 12 12 5 19 12"/>
+                    </svg>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -539,7 +541,7 @@
               </div>
             </div>
 
-            <!-- Puces de filtre Material Design 3 à coche active -->
+            <!-- Barre de filtres segmentée Cupertino à coche active -->
             <div class="filter-chips-bar" role="tablist" aria-label="Filtres des instructions">
               <button type="button" class="filter-chip active" role="tab" aria-selected="true" data-inst-filter="ALL" onclick="setInstructionFilter('ALL')">
                 <svg class="icon chip-check" viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
@@ -720,7 +722,7 @@
           </div>
         </section>
 
-        <!-- Bouton flottant contextuel dans la zone du pouce sur Mobile (M3 Extended FAB) -->
+        <!-- Bouton flottant contextuel dans la zone du pouce sur Mobile (Apple Pill Action) -->
         <button type="button" id="mobileContextFab" class="mobile-fab" onclick="triggerMobileContextFab()" hidden>
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
             <line x1="12" y1="5" x2="12" y2="19"/>
@@ -732,7 +734,7 @@
       </main>
     </div>
 
-    <!-- Barre de navigation inférieure Mobile (< 768px) — Material 3 NavigationBar -->
+    <!-- Barre d'onglets inférieure Mobile (< 768px) — iOS Tab Bar -->
     <nav class="mobile-nav" aria-label="Navigation principale mobile">
       <button type="button" id="mobChat" class="mobile-nav-btn active" onclick="switchMainView('chat')">
         <span class="nav-icon-pill" aria-hidden="true">
@@ -797,12 +799,14 @@
   <!-- Modale : Créer / Modifier une Instruction Administrative -->
   <div id="modalInstructionForm" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalInstFormTitle" hidden>
     <div class="modal-card">
-      <div class="sheet-grabber" aria-hidden="true"></div>
-      <div class="modal-header">
-        <h2 id="modalInstFormTitle" class="modal-title">Nouvelle instruction administrative</h2>
-        <button type="button" class="btn-icon" aria-label="Fermer la fenêtre" onclick="closeModal('modalInstructionForm')">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
+      <div class="sheet-drag-zone">
+        <div class="sheet-grabber" aria-hidden="true"></div>
+        <div class="modal-header">
+          <h2 id="modalInstFormTitle" class="modal-title">Nouvelle instruction administrative</h2>
+          <button type="button" class="btn-icon" aria-label="Fermer la fenêtre" onclick="closeModal('modalInstructionForm')">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
       </div>
       <form id="formInstruction" onsubmit="submitInstructionForm(event)">
         <div class="modal-body">
@@ -861,12 +865,14 @@
   <!-- Modale : Détail, Suivi & Historique d'une Instruction -->
   <div id="modalInstructionDetail" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalInstDetailTitle" hidden>
     <div class="modal-card wide">
-      <div class="sheet-grabber" aria-hidden="true"></div>
-      <div class="modal-header">
-        <h2 id="modalInstDetailTitle" class="modal-title">Détail de l'instruction</h2>
-        <button type="button" class="btn-icon" aria-label="Fermer le détail" onclick="closeModal('modalInstructionDetail')">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
+      <div class="sheet-drag-zone">
+        <div class="sheet-grabber" aria-hidden="true"></div>
+        <div class="modal-header">
+          <h2 id="modalInstDetailTitle" class="modal-title">Détail de l'instruction</h2>
+          <button type="button" class="btn-icon" aria-label="Fermer le détail" onclick="closeModal('modalInstructionDetail')">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
       </div>
       <div id="modalInstDetailBody" class="modal-body"></div>
       <div id="modalInstDetailFooter" class="modal-footer"></div>
@@ -876,12 +882,14 @@
   <!-- Modale : Infos du Message (Statuts par destinataire) -->
   <div id="modalMessageInfo" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalMsgInfoTitle" hidden>
     <div class="modal-card">
-      <div class="sheet-grabber" aria-hidden="true"></div>
-      <div class="modal-header">
-        <h2 id="modalMsgInfoTitle" class="modal-title">Informations du message</h2>
-        <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalMessageInfo')">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
+      <div class="sheet-drag-zone">
+        <div class="sheet-grabber" aria-hidden="true"></div>
+        <div class="modal-header">
+          <h2 id="modalMsgInfoTitle" class="modal-title">Informations du message</h2>
+          <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalMessageInfo')">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
       </div>
       <div id="modalMsgInfoBody" class="modal-body"></div>
     </div>
@@ -890,12 +898,14 @@
   <!-- Modale : Infos de la Conversation & Gestion des Membres -->
   <div id="modalConversationInfo" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalConvInfoTitle" hidden>
     <div class="modal-card wide">
-      <div class="sheet-grabber" aria-hidden="true"></div>
-      <div class="modal-header">
-        <h2 id="modalConvInfoTitle" class="modal-title">Paramètres et membres</h2>
-        <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalConversationInfo')">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
+      <div class="sheet-drag-zone">
+        <div class="sheet-grabber" aria-hidden="true"></div>
+        <div class="modal-header">
+          <h2 id="modalConvInfoTitle" class="modal-title">Paramètres et membres</h2>
+          <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalConversationInfo')">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
       </div>
       <div id="modalConvInfoBody" class="modal-body"></div>
     </div>
@@ -904,12 +914,14 @@
   <!-- Modale : Création d'un Groupe de Travail -->
   <div id="modalCreateGroup" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalCreateGroupTitle" hidden>
     <div class="modal-card">
-      <div class="sheet-grabber" aria-hidden="true"></div>
-      <div class="modal-header">
-        <h2 id="modalCreateGroupTitle" class="modal-title">Créer un groupe de service</h2>
-        <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalCreateGroup')">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
+      <div class="sheet-drag-zone">
+        <div class="sheet-grabber" aria-hidden="true"></div>
+        <div class="modal-header">
+          <h2 id="modalCreateGroupTitle" class="modal-title">Créer un groupe de service</h2>
+          <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalCreateGroup')">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
       </div>
       <form onsubmit="submitCreateGroup(event)">
         <div class="modal-body">
@@ -941,12 +953,14 @@
   <!-- Modale : Invitation d'un Nouvel Agent (ADMIN uniquement) -->
   <div id="modalInviteAgent" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalInviteTitle" hidden>
     <div class="modal-card">
-      <div class="sheet-grabber" aria-hidden="true"></div>
-      <div class="modal-header">
-        <h2 id="modalInviteTitle" class="modal-title">Enrôler et inviter un agent</h2>
-        <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalInviteAgent')">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
+      <div class="sheet-drag-zone">
+        <div class="sheet-grabber" aria-hidden="true"></div>
+        <div class="modal-header">
+          <h2 id="modalInviteTitle" class="modal-title">Enrôler et inviter un agent</h2>
+          <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalInviteAgent')">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
       </div>
       <form onsubmit="submitInviteAgent(event)">
         <div class="modal-body">
@@ -989,12 +1003,14 @@
   <!-- Modale : Confirmation d'action sensible (Suspension / Révocation / Déclaration d'exécution) -->
   <div id="modalActionConfirm" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalActionTitle" hidden>
     <div class="modal-card">
-      <div class="sheet-grabber" aria-hidden="true"></div>
-      <div class="modal-header">
-        <h2 id="modalActionTitle" class="modal-title">Confirmation</h2>
-        <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalActionConfirm')">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
+      <div class="sheet-drag-zone">
+        <div class="sheet-grabber" aria-hidden="true"></div>
+        <div class="modal-header">
+          <h2 id="modalActionTitle" class="modal-title">Confirmation</h2>
+          <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalActionConfirm')">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
       </div>
       <form onsubmit="submitActionConfirm(event)">
         <div class="modal-body">
