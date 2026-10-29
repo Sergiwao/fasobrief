@@ -2,77 +2,54 @@
 ## FASOBRIEF — Protocole de Vérification pour le Jury d'Entretien
 **Sprint Technique Pré-Hackathon 226 — Édition 2026**
 
-Ce document permet aux membres du jury de reproduire l'ensemble des tests de sécurité et de conformité, soit en ligne de commande automatisée, soit de façon interactive dans l'application web.
+Ce guide permet aux membres du jury de vérifier l'intégralité des exigences éliminatoires et fonctionnelles de FasoBrief, en ligne de commande puis directement dans l'interface.
 
 ---
 
-## 1. Exécution des Tests Automatisés (1 commande)
+## 1. Exécution Automatisée sur Base Isolée (1 commande)
 
-Depuis la racine du projet, lancez :
+Depuis la racine du dépôt :
 ```bash
 npm test
 ```
-**Résultat attendu :** 14 / 14 tests réussis avec statut `✅ TOUTES LES EXIGENCES DE SÉCURITÉ SONT VALIDÉES`.
+Cette commande exécute successivement sur une base SQLite temporaire isolée (`DATABASE_PATH` dans le dossier temporaire système, sans altérer `data/`) :
+1. **`tests/integration.test.js` (5 scénarios d'intégration HTTP & WebSocket)** : blocage du contournement 2FA, cycle complet invitation 128 bits → activation TOTP en 2 étapes → connexion, conversations `DIRECT`/`GROUP` + Olm/Megolm + statuts réels (`sent`/`delivered`/`read`) + fichiers chiffrés `AES-256-GCM`, cycle complet des instructions versionnées (`Consultée` ≠ `Confirmée Ed25519` ≠ `Exécutée`), suspension/réactivation et révocation WebSocket synchrone.
+2. **`tests/run_all_security_tests.js` (14 épreuves de sécurité réglementaires)** : rejet intrus HTTP 403, rejet codes TOTP erronés, échange Olm Double Ratchet + Megolm, inspection SQL directe confirmant zéro texte ni clé en clair, contrôle strict des pièces jointes, vérification mathématique `ed25519_verify`, révocation et rotation effective de session Megolm.
 
 ---
 
-## 2. Reproduction des Épreuves de Démonstration en Direct (UI)
+## 2. Reproduction Interactive en Direct dans le Navigateur
 
-Démarrez l'application si ce n'est pas déjà fait :
+Pour faciliter l'évaluation par le jury sur un poste unique, lancez le serveur avec le mode démonstration explicite :
 ```bash
-npm start
-# Accès : http://localhost:3000
+npm run reset-demo
+npm run start:demo
+# Ouvrir http://localhost:3000
 ```
+*(En mode production standard via `npm start`, le panneau d'accès rapide démo et le générateur TOTP sont totalement désactivés.)*
 
-### Épreuve A : « Le serveur ne lit rien » (Inspection Base SQL & Trafic)
-1. Connectez-vous avec le compte du Directeur (`usr_dir_01`).
-2. Saisissez le code TOTP officiel ou cliquez sur « Générer Code Démo » (ou tapez `123456`), puis validez.
-3. Envoyez un message chiffré dans le groupe : `"Ordre de mission confidentiel N° 402"`.
-4. Cliquez sur **« Inspecter Ciphertext (Preuve E2EE) »** sous la bulle du message.
-5. Observez le payload brut relayé :
-   * **Résultat observé :** Le serveur ne stocke que du ciphertext base64 AES-256-GCM / Megolm, avec son IV 96-bit et son tag MAC 128-bit.
-6. Rendez-vous dans l'onglet **« Console Sécurité & Révocation »** et cliquez sur **« Inspecter Base SQL (Zéro Clair) »**.
-   * **Résultat observé :** Affichage direct des enregistrements SQL de la table `messages`. Aucun mot du texte source n'apparaît.
+### Épreuve A : « Le serveur ne lit rien » (Inspection SQLite en direct)
+1. Sur l'écran d'accueil, cliquez sur **Dr. Salif Ouédraogo (`FASO-DIR-01`)**, puis validez le 2e facteur TOTP.
+2. Dans la conversation **Coordination Générale MTDPCE**, envoyez un message texte et joignez un fichier quelconque.
+3. Ouvrez l'onglet **Administration** → sous-onglet **Vérification serveur (Jury)** → cliquez sur **Inspecter SQLite**.
+4. **Constat :** `privateKeysStoredOnServer: 0`, `serverCanDecrypt: false`. Les tables `messages` et `encrypted_files` ne contiennent que des ciphertexts Megolm signés Ed25519 et des blobs opaques `AES-256-GCM` sans nom ni type MIME réel.
 
----
+### Épreuve B : « Révocation immédiate d'un agent »
+1. Ouvrez une fenêtre de navigation privée sur `http://localhost:3000` et connectez-vous en tant qu'**Ibrahim Kaboré (`FASO-AGT-03`, AGENT)**.
+2. Dans la première fenêtre (`Dr. Salif Ouédraogo`, `DIRECTEUR`), ouvrez **Administration** → **Comptes et révocation** → cliquez sur **Révoquer** en face d'Ibrahim Kaboré et saisissez le motif officiel.
+3. **Constat immédiat :**
+   - Dans la fenêtre d'Ibrahim Kaboré, le WebSocket est coupé instantanément (code `4001`), l'interface est verrouillée et la bannière d'alerte s'affiche.
+   - Toute tentative de reconnexion de `FASO-AGT-03` est rejetée HTTP 403 (`COMPTE_REVOQUE_ACCES_INTERDIT`).
+   - L'époque de clé Megolm du groupe est incrémentée (`key_epoch + 1`), excluant mathématiquement le compte révoqué des nouveaux échanges.
 
-### Épreuve B : « Révocation Immédiate d'un Agent »
-1. Ouvrez une seconde fenêtre de navigateur (ou un onglet de navigation privée) sur `http://localhost:3000`.
-2. Connectez-vous en tant qu'**Ibrahim Kaboré (Agent, FASO-AGT-03)**.
-3. Dans la première fenêtre (session Directeur), allez dans l'onglet **« Console Sécurité & Révocation »**.
-4. Repérez la ligne d'Ibrahim Kaboré et cliquez sur **« 🚫 Révoquer Immédiatement »**.
-5. Renseignez le motif officiel : `"Perte de terminal de service"`.
-6. Observez instantanément l'écran de l'Agent dans la deuxième fenêtre :
-   * **Résultat observé :** 
-     - La connexion WebSocket est coupée immédiatement (code 4001 `AGENT_REVOKED`).
-     - Une bannière rouge d'alerte de sécurité s'affiche : *« Votre accès a été immédiatement révoqué par l'administration »*.
-     - L'interface est verrouillée.
-     - Toute tentative de rafraîchissement ou de reconnexion est rejetée avec le message `AGENT_REVOQUE_ACCES_INTERDIT`.
-     - Les clés de chiffrement de groupe Megolm sont immédiatement renouvelées (re-keying) pour les membres restants.
+### Épreuve C : « Tentative d'accès d'un intrus non enrôlé »
+1. Dans **Administration** → **Vérification serveur (Jury)**, cliquez sur **Exécuter le test 403** (ou tentez une connexion sur l'écran d'accueil avec un matricule inconnu).
+2. **Constat :** Rejet HTTP 403 immédiat et enregistrement horodaté `INTRUSION_ATTEMPT` visible dans le sous-onglet **Journal d'audit**.
 
----
-
-### Épreuve C : « Tentative d'Accès d'un Intrus »
-1. Dans l'onglet **« Console Sécurité & Révocation »**, cliquez sur **« Lancer Test d'Intrus »**.
-2. Un compte non enrôlé (`INTRUS_HACKER_007`) tente une authentification par l'API `POST /api/auth/login-step1`.
-   * **Résultat attendu et observé :** Rejet HTTP 403 `COMPTE_NON_ENROLE_OU_INCONNU`.
-3. Cliquez sur l'onglet **« Journal d'Audit Immuable »** :
-   * **Résultat observé :** L'événement `INTRUSION_ATTEMPT` est consigné avec son horodatage exact et l'adresse IP source.
-
----
-
-### Épreuve D : « Innovation FasoBrief — Suivi des Instructions Administratives »
-1. En tant que Directeur ou Chef de service, cliquez sur **« ⚖️ Émettre Instruction FasoBrief »**.
-2. Renseignez l'objet : `"Transmission du bilan d'exécution avant vendredi 16h"`.
-3. Cliquez sur **« Émettre & Chiffrer »** :
-   * L'instruction apparaît dans la conversation sous la forme d'une carte administrative dorée avec sa référence officielle `INST-2026-XXXX`.
-4. Cliquez sur **« Accuser Réception »** :
-   * Le statut bascule sur `✓ Connaissance Prise`.
-5. Ouvrez l'onglet **« Instructions & Suivi »** :
-   * Le tableau de bord affiche le taux d'acquittement global mis à jour en temps réel et la liste nominative des prises de connaissance avec leur horodatage exact.
-
----
-
-### Épreuve E : « Bonus Langues Nationales »
-1. En haut à droite de l'écran, changez la langue vers **Mooré** ou **Dioula**.
-   * **Résultat observé :** L'ensemble des badges, menus, boutons et modales basculent instantanément dans la langue nationale choisie.
+### Épreuve D : « Cycle complet d'une Instruction Administrative FasoBrief »
+1. Connecté en tant que `FASO-DIR-01`, cliquez sur **Instruction** dans la conversation active, saisissez l'objet et les consignes puis publiez.
+2. Basculez vers **Aminata Sawadogo (`FASO-CHF-02`)** via le menu profil :
+   - Une alerte interne apparaît dans **Alertes**.
+   - Ouvrez la fiche de l'instruction : le statut passe à **Consultée (à confirmer)** (`viewed_at` enregistré sans valoir confirmation).
+   - Cliquez sur **Confirmer la réception (Signature Ed25519)**, puis sur **Déclarer exécutée** avec un compte rendu chiffré.
+3. Revenez sur `FASO-DIR-01` : le suivi nominatif affiche les horodatages exacts, la mention **Ed25519 vérifiée** et le compte rendu déchiffré. Si l'émetteur clique sur **Modifier (Nouvelle version)**, l'instruction passe en `v2` tout en conservant les preuves `v1` dans l'historique.

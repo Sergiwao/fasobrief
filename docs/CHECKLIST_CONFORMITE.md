@@ -1,41 +1,31 @@
-# Checklist de Conformité Réglementaire --- FasoBrief
-## Sprint Technique Pré-Hackathon 226 (Édition 2026 - MTDPCE / DGTD)
+# Checklist de Conformité Réglementaire — FasoBrief
+## Sprint Technique Pré-Hackathon 226 (Édition 2026 — MTDPCE / DGTD)
 
-**Date de mise à jour :** 28 octobre 2026  
-**Document source :** `Sprint_Technique_Pre-Hackathon_2026-KFD.pdf` (Règlement officiel)  
-**Statut Global :** 100% Conforme aux Exigences Obligatoires & Épreuves Eliminatoires
+**Date de vérification :** 29 octobre 2026  
+**Sources vérifiées :** `Sprint_Technique_Pre-Hackathon_2026-KFD.pdf`, `FasoBrief_Prompt_AntiGravity.md`, `AGENTS.md`  
+**Résultat des suites automatisées (`npm test`) :** 5 / 5 tests d'intégration + 14 / 14 tests de sécurité réussis sur base isolée.
 
 ---
 
-### Tableau d'Analyse et de Suivi de Conformité
-
-| N° | Exigence exacte du règlement | Interprétation pratique pour FasoBrief | Composant / Fichier concerné | Méthode de vérification & Preuve | État | Risque si non satisfait |
-|---|---|---|---|---|---|---|
-| **01** | **Équipe :** 2 à 3 étudiants d'une même université/établissement supérieur burkinabè | Vérifier les attestations 2026-2027 et renseigner la fiche équipe | `docs/FICHE_EQUIPE.md` | Contrôle documentaire administratif | Modèle prêt à renseigner | **Éliminatoire** (rejet candidature) |
-| **02** | **Obligation Open Source :** Code produit sous licence OSI (Apache 2.0) avec `LICENSE` à la racine | Dépôt sous licence Apache 2.0 avec fichier LICENSE formel à la racine | `LICENSE` | Présence du fichier LICENSE Apache 2.0 | **Validé** | **Éliminatoire** |
-| **03** | **Traçabilité Open Source :** Chaque technologie citée avec sa licence et lien projet | Tableau complet des dépendances et bibliothèques dans README et notes | `README.md`, `docs/NOTE_PRE_PROJET.md` | Audit des licences de package (`@matrix-org/olm`, etc.) | **Validé** | Pénalité note dossier (sur 15 pts) |
-| **04** | **Souveraineté stricte :** Aucune API ni service tiers (gratuit/payant) indispensable | Fonctionnement 100% autonome en réseau isolé / local / serveur d'État | `docker-compose.yml`, code client & serveur | Test sans connexion internet (100% local) | **Validé** | **Éliminatoire** |
-| **05** | **Déclaration d'engagement OS :** Déclarer son niveau (Créer sur bibliothèque éprouvée) | Déclaration formelle sous l'option « Créer » basée sur `@matrix-org/olm` | `README.md`, `docs/NOTE_PRE_PROJET.md` | Mention claire dans README et note pré-projet | **Validé** | Conformité dossier |
-| **06** | **Chiffrement E2EE :** Messages ET fichiers chiffrés de bout en bout via protocole éprouvé | Olm/Megolm via `@matrix-org/olm` et WebCrypto AES-256-GCM client-side | `client/js/crypto-client.js` | Inspection des payloads envoyés et reçus | **Validé** | **Éliminatoire** |
-| **07** | **Interdiction crypto maison :** Aucune cryptographie développée par l'équipe | Utiliser exclusivement `@matrix-org/olm` et standard W3C WebCrypto API | `package.json`, `client/js/crypto-client.js` | Revue de code du jury lors de l'entretien | **Validé** | **Éliminatoire direct** |
-| **08** | **Zéro texte en clair côté serveur :** Aucun message ni fichier en clair sur le serveur | Base SQLite et stockage ne contiennent que des ciphertexts opaques | `server/database.js`, `server/server.js` | Requête SQL directe sur DB (Test 6 automatisé) | **Validé** | **Éliminatoire direct** |
-| **09** | **Hébergement souverain & déploiement :** Une seule commande (Docker Compose) | `docker compose up --build` démarre tous les services sans intervention | `docker-compose.yml`, `Dockerfile` | Test d'exécution conteneurisée | **Validé** | Sanction qualité technique |
-| **10** | **Identité vérifiée & Enrôlement :** Seuls des agents préalablement enrôlés peuvent rejoindre | Inscription libre fermée. Enrôlement administratif pré-requis | `server/auth.js` (Test 1 automatisé) | Test d'accès avec compte non enrôlé (rejet 403) | **Validé** | **Éliminatoire** (épreuve "Intrus") |
-| **11** | **Authentification forte (2FA) :** Second facteur obligatoire | TOTP standard (RFC 6238) avec fenêtre temporelle stricte | `server/auth.js`, `client/index.html` | Validation du token TOTP lors du login (Test 4) | **Validé** | Non-respect du socle obligatoire |
-| **12** | **Gestion des rôles :** Rôles administratifs et permissions | Niveaux d'habilitation RBAC (Admin, Directeur, Chef de service, Agent) | `server/auth.js` (`requireRole`) | Tentative d'action non autorisée bloquée côté serveur | **Validé** | Non-respect du socle obligatoire |
-| **13** | **Révocation immédiate :** Perte immédiate d'accès sur tous appareils et aux nouveaux messages | Invalidation sessions + coupure WebSocket + rotation clé Megolm | `server/revocation.js` | Épreuve en direct : révocation synchrone (Tests 10-13) | **Validé** | **Éliminatoire** (épreuve "Révocation") |
-| **14** | **Minimisation des métadonnées :** Documenter ce que le serveur voit et mesures de réduction | Documentation précise des en-têtes, timestamps et minimisation appliquée | `docs/NOTE_SECURITE.md` | Analyse comparative du schéma de données | **Validé** | Noté sur 10 pts dossier |
-| **15** | **Données strictement fictives :** Aucune donnée ou compte personnel réel | Jeux de données fictifs avec des noms, ministères et matricules imaginaires | `server/seed.js` | Inspection du code et des données de démo | **Validé** | **Éliminatoire direct** |
-| **16** | **Interdiction tests sur systèmes réels :** Aucun test d'intrusion externe | Tous les tests d'attaque/sécurité sont menés sur le conteneur local | `tests/run_all_security_tests.js` | Environnement de test 100% localisé | **Validé** | **Disqualification immédiate** |
-| **17** | **Livrable 1 : Fiche équipe :** Fiche d'identification des membres et justificatifs | Fiche d'équipe synthétique avec les mentions exigées | `docs/FICHE_EQUIPE.md` | Fichier créé et prêt à être renseigné | **Validé** | Rejet dossier |
-| **18** | **Livrable 2 : Note de pré-projet :** 2 pages max, concept, archi, protocoles, licences, engagement | Document structuré et synthétique de 2 pages | `docs/NOTE_PRE_PROJET.md` | Contrôle de longueur et de fond effectué | **Validé** | Noté sur 25 pts |
-| **19** | **Livrable 3 : Note de sécurité :** 2 pages max, menaces, protections, métadonnées, limites | Document technique de 2 pages sans complaisance | `docs/NOTE_SECURITE.md` | Contrôle de longueur et de rigueur effectué | **Validé** | Noté sur 10 pts |
-| **20** | **Livrable 4 : Dépôt public & commits :** Git public avec historique progressif sur la durée | Commits réguliers, modulaires, traçables et explicites | Dépôt Git | `git log --oneline` régulier et descriptif | **En cours (Validé)** | Critère d'évaluation dossier |
-| **21** | **Livrable 5 : Vidéo de démo :** 3 minutes max (échange chiffré, révocation, innovation) | Script minuté de 170 s avec découpage seconde par seconde | `docs/DEMO_VIDEO.md` | Minutage respecté (< 180 s) | **Validé** | Évaluation dossier |
-| **22** | **Livrable README :** 2 pages max en français, installation, architecture, limites | Fichier d'accueil complet, pédagogique et structuré | `README.md` | Contrôle du contenu conforme | **Validé** | Obligatoire |
-| **23** | **Comptes de démo :** Comptes fictifs pré-configurés pour le jury | 4 agents fictifs (Directeur, Chef de service, Agent, Admin) | `server/seed.js`, `README.md` | Connexion directe et rapide par le jury | **Validé** | Obligatoire |
-| **24** | **Innovation FasoBrief :** Instructions administratives structurées et suivi de prise de connaissance | Marquage d'instruction, assignation, statut, accusé signé numériquement | `server/server.js`, `client/js/app.js` | Démonstration du flux complet et dashboard en direct | **Validé** | Noté sur 25 pts (Innovation) |
-| **25** | **Épreuve orale - Explication de code :** Tout membre doit pouvoir expliquer le code E2EE et Auth | Code modulaire, propre, commenté en français et accessible | `server/auth.js`, `client/js/crypto-client.js` | Code documenté et accessible aux étudiants | **Validé** | **Éliminatoire** lors de l'entretien |
-| **26** | **Bonus 1 : Langue nationale (+3 pts) :** Interface dans une langue nationale (Mooré, Dioula) | Traduction multilingue intégrée (Français, Mooré, Dioula) | `client/js/i18n.js`, `client/index.html` | Sélecteur de langue fonctionnel dans l'UI | **Validé** | Bonus (+3 pts) |
-| **27** | **Bonus 2 : Tests automatisés (+2 pts) :** Tests automatisés de sécurité | Suite de tests automatisés (14 tests de sécurité stricts) | `tests/run_all_security_tests.js` | Exécution par `npm test` (14/14 réussis) | **Validé** | Bonus (+2 pts) |
-| **28** | **Bonus 3 : Contribution amont (+5 pts) :** Contribution soumise au projet OS d'origine | PR ou patch de portabilité WebAssembly ou documentation | À soumettre en ligne par l'équipe | Lien externe | En réserve | Bonus (+5 pts) |
+| N° | Exigence du règlement | Implémentation réelle dans FasoBrief | Fichiers principaux | Preuve vérifiée | État |
+|---|---|---|---|---|---|
+| **01** | Équipe de 2 à 3 étudiants burkinabè | Modèle de fiche d'identification prêt à compléter | `docs/FICHE_EQUIPE.md` | Contrôle documentaire | Prêt à renseigner |
+| **02** | Licence Open Source reconnue OSI | Licence Apache-2.0 à la racine du dépôt | `LICENSE` | Fichier présent | **Validé** |
+| **03** | Traçabilité des composants open source | Tableau complet versions + licences OSI | `README.md`, `docs/NOTE_PRE_PROJET.md` | Vérifié avec `package.json` | **Validé** |
+| **04** | Aucun service tiers indispensable | Zéro API cloud, zéro SMTP externe, zéro FCM/APNs, zéro CDN | `server/`, `client/`, `docker-compose.yml` | Exécution locale autonome | **Validé** |
+| **05** | Déclaration d'engagement Open Source | Niveau « Créer » sur bibliothèque éprouvée `@matrix-org/olm` | `README.md`, `docs/NOTE_PRE_PROJET.md` | Documenté | **Validé** |
+| **06** | Chiffrement E2EE messages ET fichiers | Olm 1:1 Double Ratchet + Megolm + fichiers `AES-256-GCM` | `client/js/crypto-client.js`, `server/routes/crypto-routes.js` | Tests 05 & 07 + E2E navigateur | **Validé** |
+| **07** | Zéro cryptographie maison | `@matrix-org/olm` (Apache-2.0) + WebCrypto W3C uniquement | `client/js/crypto-client.js` | Revue statique & tests | **Validé** |
+| **08** | Zéro texte ni fichier en clair sur serveur | Ciphertexts Megolm et blobs opaques sans nom ni MIME réel | `server/database.js`, `server/routes/conversations-routes.js` | Test 06 + `/api/admin/server-inspection` | **Validé** |
+| **09** | Déploiement en une seule commande | `docker compose up --build` + healthcheck `/api/health` | `Dockerfile`, `docker-compose.yml` | Configuration vérifiée | **Validé** |
+| **10** | Agents préalablement enrôlés uniquement | Invitation 128 bits par `ADMIN`, rejet HTTP 403 des intrus | `server/auth.js`, `server/routes/admin-routes.js` | Test 01 + Intégration #2 | **Validé** |
+| **11** | Authentification forte 2FA obligatoire | TOTP RFC 6238 strict lié au 1er facteur par `challengeToken` | `server/auth.js`, `server/routes/auth-routes.js` | Tests 02-04 + Intégration #1 | **Validé** |
+| **12** | Rôles et permissions côté serveur | `ADMIN`, `DIRECTEUR`, `CHEF_SERVICE`, `AGENT` + contrôle membre | `server/auth.js`, `server/routes/*.js` | Tests d'intégration RBAC | **Validé** |
+| **13** | Révocation immédiate multi-appareils | Coupure WS `4001`, purge clés Olm, retrait groupes, rotation Megolm | `server/revocation.js` | Tests 10-13 + Intégration #5 | **Validé** |
+| **14** | Minimisation et doc. des métadonnées | Titres d'instructions et noms de fichiers chiffrés ; purge enveloppes Olm | `docs/NOTE_SECURITE.md` | Vérifié en base SQLite | **Validé** |
+| **15** | Données strictement fictives | 5 profils fictifs et 2 organisations de démonstration | `server/seed.js` | Inspection du seed | **Validé** |
+| **16** | Interdiction de tests sur systèmes réels | Tests exécutés exclusivement sur base SQLite temporaire locale | `tests/integration.test.js`, `tests/run_all_security_tests.js` | Isolation `os.tmpdir()` | **Validé** |
+| **17** | Innovation : Instructions structurées | Brouillon, publication, `viewed` ≠ `ack` signé Ed25519, versions, exécution | `server/routes/instructions-routes.js`, `client/js/app.js` | Tests 08-09 + Intégration #4 | **Validé** |
+| **18** | UX Mobile-First sobre & responsive | Charte blanc/`#00705A`, zéro emoji/dégradé, `320px`–`1440px` sans débordement | `client/css/app.css`, `client/index.html` | Audit Chromium headless 6 tailles | **Validé** |
+| **19** | Bonus Langues nationales (+3 pts) | Français, Mooré et Dioula disponibles hors ligne | `client/js/i18n.js` | Bascule UI vérifiée | **Validé** |
+| **20** | Bonus Tests automatisés (+2 pts) | 19 tests automatisés reproductibles via `npm test` | `tests/` | `npm test` (code retour 0) | **Validé** |

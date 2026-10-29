@@ -3,100 +3,80 @@
 > **Sprint Technique Pré-Hackathon 226 — Édition 2026**  
 > *Ministère de la Transition Digitale, des Postes et des Communications Électroniques (MTDPCE) — DGTD, Burkina Faso*  
 > **Challenge :** La messagerie souveraine de l'administration  
-> **Licence :** Apache 2.0 (Open Source Initiative)
+> **Licence :** Apache-2.0 (Open Source Initiative)
 
 ---
 
 ## 1. Concept & Utilité Administrative
 
-Les agents de l'État burkinabè échangent quotidiennement des informations officielles sur des messageries grand public étrangères dont les serveurs échappent au contrôle souverain du pays. 
+Les agents publics échangent quotidiennement des informations de service sur des messageries grand public étrangères dont l'infrastructure échappe au contrôle souverain de l'État.
 
-**FasoBrief** est une messagerie instantanée souveraine, auto-hébergeable sur l'infrastructure de l'État burkinabè, garantissant un **chiffrement de bout en bout (E2EE)** strict pour tous les messages et fichiers, sans aucun service tiers ni API externe.
+**FasoBrief** est une messagerie mobile-first auto-hébergeable sur l'infrastructure de l'État burkinabè, garantissant un **chiffrement de bout en bout (E2EE) authentique** pour tous les messages et fichiers, sans aucun service tiers indispensable (ni API externe, ni SMTP tiers, ni Web Push cloud, ni police distante).
 
-### L'Innovation FasoBrief : Suivi des Instructions Administratives
-Au-delà de la messagerie chiffrée, FasoBrief intègre nativement un mécanisme d'**instructions administratives structurées** :
-1. Un supérieur hiérarchique (Directeur, Chef de service) peut marquer un message comme une **instruction officielle** avec objet, référence (`INST-2026-XXXX`) et échéance.
-2. Les agents destinataires reçoivent l'instruction et émettent un **accusé de prise de connaissance signé numériquement**.
-3. Un **tableau de bord de suivi hiérarchique** permet à l'autorité d'observer en temps réel le taux de prise en compte nominatif de ses ordres de service.
+### L'Innovation FasoBrief : Instructions Administratives Structurées et Versionnées
+Au-delà des discussions individuelles (`DIRECT`) et de groupes (`GROUP`), FasoBrief intègre le cycle complet des **instructions administratives** :
+1. Une autorité habilitée (`DIRECTEUR`, `CHEF_SERVICE`, `ADMIN`) rédige ou convertit un message en **instruction officielle** dotée d'une référence (`INST-2026-XXXX`), d'une priorité, d'une échéance et de destinataires nominatifs (objet et consignes chiffrés via Megolm).
+2. FasoBrief distingue strictement la simple **consultation** (`viewed_at`), la **confirmation formelle de réception signée Ed25519** (vérifiée cryptographiquement côté serveur) et la **déclaration d'exécution**.
+3. Toute modification d'une instruction publiée génère une **nouvelle version** (`v2`, `v3`...), conserve l'historique immuable des preuves antérieures et redemande confirmation aux destinataires.
 
 ---
 
 ## 2. Architecture & Sécurité Éprouvée
 
-### 2.1 Socle Cryptographique E2EE
-* **Bibliothèque de référence :** `@matrix-org/olm` (version 3.2.15, licence Apache 2.0, auditée par NCC Group), implémentant les protocoles standards **Olm** (Double Ratchet) et **Megolm** (Ratchet de groupe).
-* **Chiffrement symétrique des fichiers :** WebCrypto API (`AES-256-GCM` 96-bit IV, 128-bit MAC tag). Les fichiers sont chiffrés sur le poste client avant téléversement.
-* **Règle absolue « Zéro fuite serveur » :** La base de données et le stockage serveur ne reçoivent, ne traitent et ne stockent **aucun texte ni fichier en clair**. Seuls des ciphertexts opaques sont relayés.
-
-### 2.2 Contrôle d'Accès & Authentification Forte
-* **Enrôlement préalable strict :** Aucune inscription publique anonyme. Seuls les agents pré-enregistrés par l'administration peuvent se connecter.
-* **Authentification forte (2FA) :** Second facteur obligatoire par mot de passe temporaire basé sur le temps **TOTP standard (RFC 6238)**, compatible FreeOTP / Google Authenticator.
-* **Gestion des Rôles (RBAC) :** `ADMIN` (Sécurité), `DIRECTEUR` (Gouvernance), `CHEF_SERVICE` (Coordination), `AGENT` (Exécution).
-* **Révocation immédiate en direct :** Un agent révoqué voit l'ensemble de ses sessions invalidées, sa connexion WebSocket coupée instantanément et est exclu des groupes avec rotation immédiate des clés de chiffrement (re-keying Megolm).
-
----
-
-## 3. Technologies Utilisées & Licences Open Source
+- **Chiffrement E2EE Olm / Megolm (`@matrix-org/olm` v3.2.15, Apache-2.0) :** Chaque terminal génère localement un compte `Olm.Account` (`Curve25519` + `Ed25519` + `One-Time Prekeys`). Les clés de session de groupe **Megolm** sont distribuées appareil par appareil via des sessions 1:1 **Olm Double Ratchet**.
+- **Chiffrement des pièces jointes (`AES-256-GCM` WebCrypto) :** Les fichiers sont chiffrés sur le terminal client avant envoi ; la clé symétrique 256 bits, l'IV 96 bits, le condensat `SHA-256` et le nom réel transitent exclusivement dans le message Megolm.
+- **Enrôlement préalable & 2FA TOTP (RFC 6238) :** Inscription publique fermée. L'administrateur génère un code d'activation à usage unique (128 bits, haché SHA-256, valable 72 h). Connexion en deux étapes obligatoires (mot de passe `bcrypt` + code TOTP temporaire lié par `challengeToken`).
+- **Révocation immédiate en direct :** Coupe instantanément les WebSockets (`4001`), invalide les sessions, purge les clés publiques Olm de l'agent révoqué, incrémente l'époque du groupe et force la rotation immédiate des clés Megolm pour les membres restants.
 
 | Composant | Technologie | Version | Licence | Rôle dans FasoBrief |
 |---|---|---|---|---|
-| Cœur E2EE | `@matrix-org/olm` | 3.2.15 | Apache 2.0 | Protocole Double Ratchet Olm / Megolm |
-| Moteur Base de Données | `node:sqlite` (Node.js) | v24 native | MIT / Public Domain | Stockage SQLite souverain sans compilation C++ |
-| Authentification 2FA | `otplib` | 13.5.0 | MIT | Vérification TOTP standard RFC 6238 |
-| Hachage Mots de Passe | `bcryptjs` | 3.0.3 | MIT | Hachage sécurisé salé des mots de passe |
-| Serveur Temps Réel | `ws` & `express` | 8.22 / 5.3 | MIT | Relais WebSocket temps réel et API HTTP |
-| Client Web | Vanilla JS & WebCrypto | Standard W3C | Apache 2.0 | Chiffrement client-side et interface responsive |
+| Cœur cryptographique E2EE | `@matrix-org/olm` | 3.2.15 | Apache-2.0 | Olm Double Ratchet, Megolm & Ed25519 |
+| Chiffrement binaire fichiers | WebCrypto API | W3C | Standard | AES-256-GCM & SHA-256 côté client |
+| Base de données souveraine | `node:sqlite` | Node 24 | MIT | Persistance SQLite sans service externe |
+| Authentification 2FA | `otplib` | 13.4.0 | MIT | Validation TOTP RFC 6238 |
+| Hachage mots de passe | `bcryptjs` | 3.0.3 | MIT | Hachage salé des mots de passe |
+| Serveur HTTP & Temps réel | `express` & `ws` | 5.2 / 8.20 | MIT | API REST, contrôle RBAC & WebSocket `/ws` |
 
-**Déclaration d'engagement Open Source (Art. 2 du règlement) :**  
-Notre équipe déclare son niveau d'engagement sous la catégorie : **« Créer (une application nouvelle reposant sur une bibliothèque éprouvée) »**, en s'appuyant sur l'implémentation de référence `@matrix-org/olm` de la Matrix.org Foundation.
+**Déclaration d'engagement Open Source :** Catégorie **« Créer (une application nouvelle reposant sur une bibliothèque éprouvée) »** basée sur `@matrix-org/olm` (Matrix.org Foundation).
 
 ---
 
-## 4. Déploiement Souverain en Une Seule Commande
-
-FasoBrief s'installe sur toute infrastructure souveraine (serveur d'État, VM Linux locale) sans aucun service cloud externe :
+## 3. Déploiement en Une Commande & Exécution Locale
 
 ```bash
-# Déploiement autonome complet via Docker Compose
+# Déploiement souverain conteneurisé en une seule commande
 docker compose up --build -d
 ```
+Application disponible sur `http://localhost:3000` (sonde de santé : `GET /api/health`).
 
-L'application est immédiatement accessible sur `http://localhost:3000` (ou sur l'IP du serveur).
-
-Pour un lancement en environnement de développement Node.js :
+En environnement Node.js 24+ :
 ```bash
 npm install
-npm run seed     # Initialise la base SQLite avec les comptes fictifs
-npm start        # Démarre le serveur souverain sur le port 3000
-npm test         # Exécute la suite complète des 14 tests de sécurité automatisés
+npm start            # Mode standard souverain (2FA TOTP strict)
+npm run start:demo   # Mode démonstration jury (accès rapide + assistant TOTP activé)
+npm run reset-demo   # Réinitialise proprement la base fictive (après un test de révocation)
+npm test             # Exécute les 19 tests automatisés sur une base SQLite temporaire isolée
 ```
 
 ---
 
-## 5. Comptes Fictifs de Démonstration (Pour le Jury)
+## 4. Comptes Fictifs de Démonstration (100 % Fictifs)
 
-Conformément au règlement, **toutes les données et identités sont 100% fictives** :
+Mot de passe commun de démonstration : `FasoSecurite2026!`
 
-| Nom Fictif | Matricule | Rôle | Mot de passe | Secret TOTP Démo |
-|---|---|---|---|---|
-| Dr. Salif Ouédraogo | `FASO-DIR-01` | DIRECTEUR | `FasoSecurite2026!` | `FASOBRIEFBURKINAFASODGTD234567AB` |
-| Aminata Sawadogo | `FASO-CHF-02` | CHEF_SERVICE | `FasoSecurite2026!` | `FASOBRIEFBURKINAFASODGTD234567AB` |
-| Ibrahim Kaboré | `FASO-AGT-03` | AGENT | `FasoSecurite2026!` | `FASOBRIEFBURKINAFASODGTD234567AB` |
-| Ousmane Traoré | `FASO-ADM-00` | ADMIN | `FasoSecurite2026!` | `FASOBRIEFBURKINAFASODGTD234567AB` |
+| Nom fictif | Matricule | Rôle | Secret TOTP Base32 (RFC 6238) |
+|---|---|---|---|
+| Ousmane Traoré | `FASO-ADM-00` | `ADMIN` | `JBSWY3DPEHPK3PXP234567ABCDEFGHJK` |
+| Dr. Salif Ouédraogo | `FASO-DIR-01` | `DIRECTEUR` | `FASOBRIEFBURKINAFASODGTD234567AB` |
+| Aminata Sawadogo | `FASO-CHF-02` | `CHEF_SERVICE` | `MZXW6YTBOI5HS2LTMFZW6YTSNRSGK3LP` |
+| Ibrahim Kaboré | `FASO-AGT-03` | `AGENT` | `KRSXG5CTMVRXEZLUKN2XAZLSNF2GS33O` |
+| Mariam Compaoré | `FASO-AGT-04` | `AGENT` | `NBSWY3DPFQQFO33SNRSCC43VNZ2G643F` |
 
-> **Astuce Démo :** Lors de la saisie 2FA, cliquez sur le bouton **« Générer Code Démo »** (ou entrez `123456`) pour valider instantanément la session.
-
----
-
-## 6. Vérification des Épreuves du Jury
-
-1. **Épreuve « Le serveur ne lit rien » :** Cliquez sur *Inspecter Base SQL* dans l'onglet Sécurité ou exécutez `npm test` : le serveur ne stocke que des ciphertexts opaques.
-2. **Épreuve « Révocation » :** Cliquez sur *Révoquer Immédiatement* sur un agent dans la console d'administration : son WebSocket est coupé instantanément, ses sessions sont détruites et les clés du groupe sont renouvelées.
-3. **Épreuve « Intrus » :** Cliquez sur *Lancer Test d'Intrus* : tentative rejetée avec code 403 et journalisée dans l'audit.
-4. **Bonus Langue Nationale (+3 pts) :** Sélecteur en haut à droite avec bascule instantanée en **Mooré** ou **Dioula**.
+> En lançant `npm run start:demo` (`FASOBRIEF_DEMO_MODE=1`), l'écran de connexion affiche un sélecteur de comptes fictifs et un bouton « Insérer code TOTP démo » réservé à l'évaluation du jury. En mode normal (`npm start`), aucun générateur TOTP ni code statique n'est accessible.
 
 ---
 
-## 7. Limites Connues
-* L'archivage légal E2EE requiert une clé d'escrow institutionnelle sur coffre-fort d'État pour déchiffrer a posteriori les instructions de service.
-* Les métadonnées de transport (IP source, volume échangé, horodatage) restent visibles au niveau réseau mais sont minimisées par l'architecture.
+## 5. Limites Connues & Honnêteté Technique
+- **Remise des invitations hors bande :** Sans serveur SMTP tiers, le code d'activation à usage unique est remis à l'agent par canal administratif officiel.
+- **Notifications hors application fermée :** Le Web Push en arrière-plan nécessitant des relais tiers (FCM/APNs), les notifications sont délivrées en temps réel via WebSocket application ouverte et persistées en base à la reconnexion.
+- **Sécurité physique du terminal :** La révocation bloque immédiatement l'accès serveur et les clés futures, sans pouvoir effacer à distance d'éventuelles captures déjà effectuées sur un appareil physiquement compromis.
