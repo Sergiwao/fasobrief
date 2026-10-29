@@ -4,8 +4,6 @@
 # Sprint Technique Pré-Hackathon 226 - MTDPCE / DGTD
 # ==============================================================================
 
-version: '3.8'
-
 services:
   fasobrief:
     build:
@@ -19,11 +17,11 @@ services:
       - PORT=3000
       - NODE_ENV=production
       - DATABASE_PATH=/app/data/fasobrief.sqlite
-      - JWT_SECRET=fasobrief-secret-token-demonstration-prehackathon-2026
+      - FASOBRIEF_DEMO_MODE=${FASOBRIEF_DEMO_MODE:-1}
     volumes:
       - fasobrief_data:/app/data
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 3

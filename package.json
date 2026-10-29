@@ -1,14 +1,16 @@
 {
   "name": "fasobrief",
-  "version": "1.0.0",
-  "description": "FasoBrief - Messagerie Souveraine et Suivi des Instructions Administratives (Burkina Faso)",
+  "version": "1.1.0",
+  "description": "FasoBrief - Messagerie Administrative Souveraine E2EE (Olm/Megolm) et Suivi des Instructions (Burkina Faso)",
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
-    "test": "node tests/run_all_security_tests.js",
-    "seed": "node server/seed.js"
+    "start:demo": "node -e \"process.env.FASOBRIEF_DEMO_MODE='1'; require('./server/server.js').startServer()\"",
+    "test": "node --test tests/integration.test.js && node tests/run_all_security_tests.js",
+    "seed": "node server/seed.js",
+    "reset-demo": "node server/seed.js --reset"
   },
-  "keywords": ["e2ee", "sovereign", "burkina-faso", "matrix", "olm", "fasobrief"],
+  "keywords": ["e2ee", "sovereign", "burkina-faso", "matrix", "olm", "megolm", "fasobrief"],
   "author": "FasoBrief Team",
   "license": "Apache-2.0",
   "type": "commonjs",
