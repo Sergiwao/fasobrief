@@ -2,356 +2,903 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>FasoBrief — Messagerie Souveraine de l'Administration Publique</title>
   <link rel="stylesheet" href="css/app.css">
-  <script src="vendor/olm.js"></script>
+  <script src="/vendor/olm/olm.js"></script>
 </head>
 <body>
 
   <!-- ==================================================================== -->
-  <!-- 0. SPLASH SCREEN D'ENTRÉE ANIMÉ                                      -->
+  <!-- 0. ÉCRAN D'OUVERTURE SOBRE                                           -->
   <!-- ==================================================================== -->
-  <div id="splashScreen">
-    <div class="splash-content">
-      <div class="splash-logo">
-        <svg viewBox="0 0 24 24">
-          <path d="M12 2L3 7v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-9-5zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V8.3l7-3.89v7.58z"/>
+  <div id="splashScreen" class="splash-screen" role="status" aria-live="polite">
+    <div class="splash-box">
+      <div class="splash-mark" aria-hidden="true">
+        <svg class="icon icon-lg" viewBox="0 0 24 24">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          <path d="m9 12 2 2 4-4"/>
         </svg>
       </div>
       <div class="splash-title">FASOBRIEF</div>
-      <div class="splash-subtitle">Messagerie Souveraine de l'Administration</div>
-      <div class="splash-loader">
-        <div class="splash-loader-bar"></div>
-      </div>
+      <div class="splash-sub">Messagerie souveraine de l'administration</div>
     </div>
   </div>
 
   <!-- ==================================================================== -->
-  <!-- 1. EN-TÊTE AÉRÉ & INSTITUTIONNEL                                     -->
+  <!-- 1. ÉCRAN D'AUTHENTIFICATION FORTE (2FA) & ACTIVATION D'INVITATION    -->
   <!-- ==================================================================== -->
-  <header class="app-header">
-    <div class="brand-wrapper">
-      <svg class="brand-icon-svg" viewBox="0 0 24 24">
-        <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.38 5.08L2 22l5.09-1.34C8.54 21.49 10.22 22 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm1 14h-2v-2h2v2zm0-4h-2V7h2v5z"/>
-      </svg>
+  <main id="authScreen" class="auth-screen" hidden>
+    <div class="auth-container">
+      <div class="auth-brand">
+        <div class="auth-brand-mark" aria-hidden="true">
+          <svg class="icon icon-lg" viewBox="0 0 24 24">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            <path d="m9 12 2 2 4-4"/>
+          </svg>
+        </div>
+        <div>
+          <h1 class="auth-brand-title">FASOBRIEF</h1>
+          <p class="auth-brand-sub">Plateforme souveraine E2EE (Olm / Megolm) — Accès réservé aux agents enrôlés</p>
+        </div>
+      </div>
+
+      <div class="auth-panel">
+        <div class="auth-tabs" role="tablist" aria-label="Mode d'accès">
+          <button type="button" id="authTabLogin" class="auth-tab active" role="tab" aria-selected="true" onclick="switchAuthTab('login')">
+            Connexion agent
+          </button>
+          <button type="button" id="authTabActivate" class="auth-tab" role="tab" aria-selected="false" onclick="switchAuthTab('activate')">
+            Activer une invitation
+          </button>
+        </div>
+
+        <!-- Onglet 1 : Connexion en 2 étapes (Mot de passe + TOTP) -->
+        <div id="authPaneLogin" class="auth-body">
+          <div id="authLoginAlert" class="inline-alert error" hidden></div>
+
+          <!-- Étape 1 : Matricule & Mot de passe -->
+          <form id="formLoginStep1" onsubmit="handleLoginStep1(event)">
+            <div class="form-group">
+              <label class="form-label" for="loginMatricule">Matricule administratif</label>
+              <input id="loginMatricule" class="form-input" type="text" autocomplete="username" placeholder="ex. FASO-DIR-01" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="loginPassword">Mot de passe</label>
+              <input id="loginPassword" class="form-input" type="password" autocomplete="current-password" placeholder="Mot de passe de session" required>
+            </div>
+            <button type="submit" id="btnLoginStep1" class="btn btn-primary" style="width: 100%;">
+              Continuer vers la vérification 2FA
+            </button>
+          </form>
+
+          <!-- Étape 2 : Second facteur TOTP RFC 6238 -->
+          <form id="formLoginStep2" onsubmit="handleLoginStep2(event)" hidden>
+            <div class="inline-alert success" id="loginStep2Banner"></div>
+            <div class="form-group">
+              <label class="form-label" for="loginTotpCode">Code d'authentification TOTP (6 chiffres)</label>
+              <input id="loginTotpCode" class="form-input" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="000000" required>
+              <div class="form-hint">Saisissez le code temporaire généré par votre application d'authentification.</div>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+              <button type="button" class="btn btn-secondary" onclick="resetLoginToStep1()">Retour</button>
+              <button type="button" id="btnFillDemoTotp" class="btn btn-secondary" onclick="fillDemoTotpCode()" hidden>
+                Insérer code TOTP démo
+              </button>
+              <button type="submit" id="btnLoginStep2" class="btn btn-primary" style="flex: 1;">
+                Ouvrir la session
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Onglet 2 : Activation d'un compte invité par code à usage unique -->
+        <div id="authPaneActivate" class="auth-body" hidden>
+          <div id="authActivateAlert" class="inline-alert error" hidden></div>
+
+          <!-- Activation Étape 1 -->
+          <form id="formActivateStep1" onsubmit="handleActivateStep1(event)">
+            <p class="form-hint" style="margin-bottom: 12px;">
+              Munissez-vous de votre matricule et du code d'activation à usage unique remis par l'administrateur.
+            </p>
+            <div class="form-group">
+              <label class="form-label" for="actMatricule">Matricule attribué</label>
+              <input id="actMatricule" class="form-input" type="text" placeholder="ex. FASO-AGT-09" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="actCode">Code d'activation à usage unique</label>
+              <input id="actCode" class="form-input" type="text" placeholder="ex. A1B2-C3D4-E5F6-..." required>
+            </div>
+            <button type="submit" class="btn btn-primary" style="width: 100%;">
+              Vérifier le code d'invitation
+            </button>
+          </form>
+
+          <!-- Activation Étape 2 : Enrôlement TOTP + Définition du mot de passe -->
+          <form id="formActivateStep2" onsubmit="handleActivateStep2(event)" hidden>
+            <div class="inline-alert success" id="actAgentSummary"></div>
+
+            <div class="form-group">
+              <label class="form-label">Clé secrète TOTP (à enregistrer dans votre application 2FA)</label>
+              <div style="display: flex; gap: 6px; align-items: center;">
+                <div id="actTotpSecretDisplay" class="code-display" style="flex: 1;"></div>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="copyTextFromEl('actTotpSecretDisplay')">Copier</button>
+              </div>
+              <div class="form-hint" id="actOtpUriHint" style="word-break: break-all;"></div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="actNewPassword">Choisir un mot de passe (12 caractères minimum)</label>
+              <input id="actNewPassword" class="form-input" type="password" minlength="12" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="actConfirmPassword">Confirmer le mot de passe</label>
+              <input id="actConfirmPassword" class="form-input" type="password" minlength="12" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="actFirstTotp">Premier code TOTP à 6 chiffres (validation)</label>
+              <input id="actFirstTotp" class="form-input" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" required>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button type="button" class="btn btn-secondary" onclick="resetActivateToStep1()">Retour</button>
+              <button type="submit" class="btn btn-primary" style="flex: 1;">Activer mon compte</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Encadré Mode Démonstration Jury (affiché exclusivement si FASOBRIEF_DEMO_MODE=1) -->
+      <section id="demoQuickPanel" class="demo-box" aria-label="Accès rapide démonstration jury" hidden>
+        <div class="demo-box-head">
+          <span class="demo-box-title">Mode démonstration jury actif</span>
+          <span id="demoProvisionStatus" class="badge badge-green">E2EE prêt</span>
+        </div>
+        <p class="form-hint" style="margin-bottom: 10px;">
+          Sélectionnez un compte fictif pour préremplir le 1er facteur. En production standard, ce panneau et le générateur TOTP sont désactivés.
+        </p>
+        <div id="demoAccountsList" class="demo-accounts-list"></div>
+      </section>
+    </div>
+  </main>
+
+  <!-- ==================================================================== -->
+  <!-- 2. SHELL APPLICATIF AUTHENTIFIÉ                                      -->
+  <!-- ==================================================================== -->
+  <div id="appShell" class="app-shell" hidden>
+
+    <!-- Bannière critique en cas de révocation ou suspension en direct -->
+    <div id="criticalBanner" class="critical-banner" role="alert" hidden>
       <div>
-        <div class="brand-title">FASOBRIEF</div>
-        <div class="brand-sub">Administration Publique • E2EE</div>
+        <strong id="criticalBannerTitle">Accès interrompu :</strong>
+        <span id="criticalBannerText">Votre session a été invalidée par l'administration.</span>
       </div>
+      <button type="button" class="btn btn-secondary btn-sm" onclick="returnToLoginAfterRevocation()">
+        Retour à l'accueil
+      </button>
     </div>
 
-    <!-- Contrôles Utilisateur & Menu d'Options (Aéré sur Mobile & Desktop) -->
-    <div class="header-controls">
-      <div class="header-user-badge" onclick="toggleHeaderMenu()" title="Profil & Options">
-        <div id="headerUserAvatar" class="avatar-sm">SO</div>
-        <span id="headerUserName" class="header-user-name">Dr. S. Ouédraogo</span>
-        <svg class="icon-chevron" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
-      </div>
-
-      <!-- Menu Déroulant Style WhatsApp / Material -->
-      <div id="headerDropdownMenu" class="header-dropdown" style="display: none;">
-        <div class="dropdown-header">
-          <div class="dropdown-title">Comptes Fictifs (Démo Jury)</div>
+    <!-- Barre supérieure sobre -->
+    <header class="top-header">
+      <div class="header-brand">
+        <div class="header-logo" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            <path d="m9 12 2 2 4-4"/>
+          </svg>
         </div>
-        <div class="dropdown-item" onclick="switchDemoAccount('usr_dir_01')">
-          <span class="user-bullet dir"></span> Dr. S. Ouédraogo (Directeur)
-        </div>
-        <div class="dropdown-item" onclick="switchDemoAccount('usr_chef_02')">
-          <span class="user-bullet chef"></span> A. Sawadogo (Chef Service)
-        </div>
-        <div class="dropdown-item" onclick="switchDemoAccount('usr_agent_03')">
-          <span class="user-bullet agt"></span> I. Kaboré (Agent)
-        </div>
-        <div class="dropdown-item" onclick="switchDemoAccount('usr_admin_00')">
-          <span class="user-bullet adm"></span> O. Traoré (Admin Sécurité)
-        </div>
-
-        <div class="dropdown-divider"></div>
-
-        <div class="dropdown-header">
-          <div class="dropdown-title">Langue de l'interface</div>
-        </div>
-        <div class="dropdown-lang-row">
-          <button class="btn-lang-pill active" id="btnLangFr" onclick="selectLanguage('fr')">Français</button>
-          <button class="btn-lang-pill" id="btnLangMo" onclick="selectLanguage('mo')">Mooré</button>
-          <button class="btn-lang-pill" id="btnLangDi" onclick="selectLanguage('di')">Dioula</button>
-        </div>
-
-        <div class="dropdown-divider"></div>
-
-        <div class="dropdown-item" onclick="toggleTheme(); closeHeaderMenu();">
-          <svg viewBox="0 0 24 24" class="menu-icon"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9c0-.46-.04-.92-.1-1.36-.98 1.37-2.58 2.26-4.4 2.26-2.98 0-5.4-2.42-5.4-5.4 0-1.81.89-3.42 2.26-4.4-.44-.06-.9-.1-1.36-.1z"/></svg>
-          <span>Changer de Thème (Clair / Sombre)</span>
-        </div>
-
-        <div class="dropdown-item danger" onclick="logout()">
-          <svg viewBox="0 0 24 24" class="menu-icon"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
-          <span>Déconnexion</span>
+        <div class="header-titles">
+          <div class="header-title" data-i18n="app_title">FASOBRIEF</div>
+          <div class="header-subtitle" id="headerContextSub" data-i18n="app_subtitle">Messagerie souveraine de l'administration</div>
         </div>
       </div>
-    </div>
-  </header>
 
-  <!-- ==================================================================== -->
-  <!-- 2. BANNIÈRE D'ALERTE EN CAS DE RÉVOCATION                            -->
-  <!-- ==================================================================== -->
-  <div id="revocationAlertBanner" class="alert-banner" style="display: none;">
-    <div><strong>AVIS DE SÉCURITÉ :</strong> <span id="revocationAlertMsg">Votre accès officiel à FasoBrief a été révoqué avec effet immédiat.</span></div>
-    <button class="btn-secondary" onclick="window.location.reload()">Actualiser</button>
-  </div>
+      <div class="header-actions">
+        <button type="button" id="userMenuBtn" class="user-menu-trigger" aria-label="Menu du profil et options" aria-expanded="false" onclick="toggleUserDropdown(event)">
+          <span id="headerAvatar" class="avatar avatar-sm brand">AG</span>
+          <span id="headerUserLabel" class="user-trigger-label">Agent</span>
+          <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
 
-  <!-- ==================================================================== -->
-  <!-- 3. CONTENEUR PRINCIPAL                                               -->
-  <!-- ==================================================================== -->
-  <div class="app-container">
-
-    <!-- BARRE LATÉRALE (DISCUSSIONS / LISTE DES GROUPES) -->
-    <aside class="app-sidebar">
-      <!-- Fiche Utilisateur Actif -->
-      <div class="profile-card">
-        <div class="profile-left">
-          <div id="userAvatar" class="avatar">SO</div>
-          <div>
-            <div id="userName" class="profile-name">Dr. Salif Ouédraogo</div>
-            <div id="userMatricule" class="profile-meta">FASO-DIR-01 • DIRECTEUR</div>
+        <div id="userDropdown" class="dropdown-menu" role="menu" hidden>
+          <div class="dropdown-user-summary">
+            <div id="dropdownFullName" class="dropdown-user-name">-</div>
+            <div id="dropdownMeta" class="dropdown-user-meta">-</div>
+            <div id="dropdownDeviceMeta" class="dropdown-user-meta" style="font-family: var(--font-mono); margin-top: 4px;"></div>
           </div>
+
+          <div id="dropdownDemoSection" hidden>
+            <div class="dropdown-section-label">Basculer de compte (Démo Jury)</div>
+            <div id="dropdownDemoAccounts"></div>
+            <div class="dropdown-divider"></div>
+          </div>
+
+          <div class="dropdown-section-label">Langue</div>
+          <div class="lang-segment">
+            <button type="button" id="langBtnFr" class="lang-btn active" onclick="changeUiLang('fr')">Français</button>
+            <button type="button" id="langBtnMo" class="lang-btn" onclick="changeUiLang('mo')">Mooré</button>
+            <button type="button" id="langBtnDi" class="lang-btn" onclick="changeUiLang('di')">Dioula</button>
+          </div>
+
+          <div class="dropdown-divider"></div>
+
+          <button type="button" class="dropdown-item" onclick="toggleColorTheme()">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
+            </svg>
+            <span data-i18n="btn_theme">Basculer le thème (Clair / Sombre)</span>
+          </button>
+
+          <button type="button" class="dropdown-item danger" onclick="performLogout()">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+              <polyline points="16 17 21 12 16 7"/>
+              <line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
+            <span data-i18n="btn_logout">Déconnexion</span>
+          </button>
         </div>
       </div>
+    </header>
 
-      <!-- Onglets Desktop (Cachés sur Mobile) -->
-      <nav class="desktop-nav-tabs">
-        <button id="tabChatDesktop" class="nav-tab-btn active" onclick="switchView('chat')">
-          <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 9h12v2H6V9zm8 5H6v-2h8v2zm4-6H6V6h12v2z"/></svg>
-          <span data-i18n="tab_chat">Discussions</span>
+    <!-- Corps principal -->
+    <div class="shell-body">
+
+      <!-- Rail de navigation latéral (Desktop >= 900px) -->
+      <nav class="desktop-rail" aria-label="Navigation principale">
+        <button type="button" id="railChat" class="rail-btn active" onclick="switchMainView('chat')">
+          <span class="rail-btn-left">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            <span data-i18n="nav_chat">Discussions</span>
+          </span>
+          <span id="badgeChatDesktop" class="nav-badge" hidden>0</span>
         </button>
-        <button id="tabInstDesktop" class="nav-tab-btn" onclick="switchView('instructions')">
-          <svg viewBox="0 0 24 24"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm2 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
-          <span data-i18n="tab_instructions">Instructions</span>
+
+        <button type="button" id="railDirectory" class="rail-btn" onclick="switchMainView('directory')">
+          <span class="rail-btn-left">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+              <circle cx="9" cy="7" r="4"/>
+              <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+            <span data-i18n="nav_directory">Annuaire</span>
+          </span>
         </button>
-        <button id="tabSecDesktop" class="nav-tab-btn" onclick="switchView('security')">
-          <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
-          <span data-i18n="tab_security">Sécurité</span>
+
+        <button type="button" id="railInstructions" class="rail-btn" onclick="switchMainView('instructions')">
+          <span class="rail-btn-left">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect width="8" height="4" x="8" y="2" rx="1" ry="1"/>
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+              <path d="M12 11h4"/>
+              <path d="M12 16h4"/>
+              <path d="M8 11h.01"/>
+              <path d="M8 16h.01"/>
+            </svg>
+            <span data-i18n="nav_instructions">Instructions</span>
+          </span>
+          <span id="badgeInstDesktop" class="nav-badge" hidden>0</span>
         </button>
-        <button id="tabAuditDesktop" class="nav-tab-btn" onclick="switchView('audit')">
-          <svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
-          <span data-i18n="tab_audit">Audit</span>
+
+        <button type="button" id="railNotifications" class="rail-btn" onclick="switchMainView('notifications')">
+          <span class="rail-btn-left">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
+              <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
+            </svg>
+            <span data-i18n="nav_notifications">Alertes</span>
+          </span>
+          <span id="badgeNotifDesktop" class="nav-badge" hidden>0</span>
+        </button>
+
+        <button type="button" id="railAdmin" class="rail-btn" onclick="switchMainView('admin')" hidden>
+          <span class="rail-btn-left">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            <span data-i18n="nav_admin">Administration</span>
+          </span>
         </button>
       </nav>
 
-      <!-- Liste des Groupes Officiels -->
-      <div id="groupList" class="group-list">
-        <!-- Rempli dynamiquement -->
-      </div>
-    </aside>
+      <!-- Zone d'affichage des vues -->
+      <div class="workspace-area">
 
-    <!-- ZONE CENTRALE PRINCIPALE -->
-    <main class="app-main">
+        <!-- ================================================================ -->
+        <!-- VUE 1 : DISCUSSIONS (1:1 & GROUPES CHIFFRÉS OLM/MEGOLM)          -->
+        <!-- ================================================================ -->
+        <section id="viewChat" class="chat-layout" aria-label="Messagerie chiffrée">
+          <!-- Colonne des conversations -->
+          <aside class="conversations-pane">
+            <div class="pane-toolbar">
+              <div class="pane-toolbar-top">
+                <h2 class="pane-title" data-i18n="nav_chat">Discussions</h2>
+                <div class="pane-toolbar-actions">
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="switchMainView('directory')" aria-label="Ouvrir une discussion depuis l'annuaire">
+                    <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+                      <circle cx="9" cy="7" r="4"/>
+                      <line x1="19" y1="8" x2="19" y2="14"/>
+                      <line x1="22" y1="11" x2="16" y2="11"/>
+                    </svg>
+                    <span>Direct</span>
+                  </button>
+                  <button type="button" id="btnOpenCreateGroup" class="btn btn-primary btn-sm" onclick="openCreateGroupModal()" hidden>
+                    <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true">
+                      <line x1="12" y1="5" x2="12" y2="19"/>
+                      <line x1="5" y1="12" x2="19" y2="12"/>
+                    </svg>
+                    <span data-i18n="btn_new_group">Groupe</span>
+                  </button>
+                </div>
+              </div>
+              <input type="search" id="convSearchInput" class="form-input" style="min-height: 38px;" placeholder="Rechercher une conversation..." oninput="renderConversationsList()">
+            </div>
 
-      <!-- ==================================================================== -->
-      <!-- VUE 1 : MESSAGERIE CHIFFRÉE STYLE WHATSAPP                           -->
-      <!-- ==================================================================== -->
-      <section id="viewChat" class="chat-container">
-        <!-- En-tête de la discussion -->
-        <div class="chat-header">
-          <div class="chat-header-left">
-            <!-- Bouton retour mobile -->
-            <button class="btn-back-mobile" onclick="closeMobileChat()" title="Retour aux discussions">
-              <svg viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
-            </button>
-            <div class="avatar" style="width: 36px; height: 36px; font-size: 13px;">GD</div>
-            <div class="chat-title-group">
-              <h2 id="activeGroupName">Cabinet & Direction Générale MTDPCE</h2>
-              <p id="activeGroupMinistry">Canal ministériel sécurisé</p>
+            <div id="conversationsList" class="conv-list" role="list"></div>
+          </aside>
+
+          <!-- Panneau des messages de la conversation active -->
+          <div class="messages-pane">
+            <div id="chatEmptySelection" class="empty-state" style="margin: auto;" hidden>
+              <div class="empty-state-title">Aucune conversation sélectionnée</div>
+              <p>Choisissez une discussion dans la liste ou ouvrez l'annuaire pour contacter un agent.</p>
+            </div>
+
+            <div id="chatActiveWrap" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+              <div class="chat-topbar">
+                <div class="chat-topbar-left">
+                  <button type="button" class="btn-icon mobile-back-btn" aria-label="Retour à la liste des conversations" onclick="closeMobileConversation()">
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <line x1="19" y1="12" x2="5" y2="12"/>
+                      <polyline points="12 19 5 12 12 5"/>
+                    </svg>
+                  </button>
+                  <div id="activeConvAvatar" class="avatar brand">GR</div>
+                  <div class="chat-topbar-titles">
+                    <div id="activeConvTitle" class="chat-topbar-name">Conversation</div>
+                    <div id="activeConvSub" class="chat-topbar-sub">Chiffrement de bout en bout Olm/Megolm</div>
+                  </div>
+                </div>
+
+                <div class="chat-topbar-actions">
+                  <button type="button" id="btnChatCreateInst" class="btn btn-secondary btn-sm" onclick="openInstructionModalFromChat()" aria-label="Créer une instruction dans cette conversation" hidden>
+                    <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true">
+                      <rect width="8" height="4" x="8" y="2" rx="1" ry="1"/>
+                      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                    </svg>
+                    <span>Instruction</span>
+                  </button>
+                  <button type="button" class="btn-icon" aria-label="Informations et membres de la conversation" onclick="openConversationInfoModal()">
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <circle cx="12" cy="12" r="10"/>
+                      <path d="M12 16v-4"/>
+                      <path d="M12 8h.01"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              <div id="chatMessages" class="messages-scroll" aria-live="polite"></div>
+
+              <div class="composer-bar">
+                <input type="file" id="chatFileInput" hidden onchange="handleEncryptedFileSelection(event)">
+                <button type="button" class="btn-icon" aria-label="Joindre un fichier chiffré de bout en bout" onclick="document.getElementById('chatFileInput').click()">
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                  </svg>
+                </button>
+                <textarea id="chatComposerInput" class="composer-input" rows="1" data-i18n="placeholder_message" placeholder="Écrire un message officiel chiffré..." onkeydown="handleComposerKeydown(event)"></textarea>
+                <button type="button" class="btn btn-primary" style="padding: 0 14px;" aria-label="Envoyer le message chiffré" onclick="submitChatMessage()">
+                  <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <line x1="22" y1="2" x2="11" y2="13"/>
+                    <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
-          <div class="chat-header-badge">
-            <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
-            <span>E2EE</span>
+        </section>
+
+        <!-- ================================================================ -->
+        <!-- VUE 2 : ANNUAIRE INSTITUTIONNEL                                  -->
+        <!-- ================================================================ -->
+        <section id="viewDirectory" class="page-view" aria-label="Annuaire administratif" hidden>
+          <div class="page-inner">
+            <div class="page-header">
+              <div>
+                <h1 class="page-title" data-i18n="dir_title">Annuaire administratif</h1>
+                <p class="page-desc" data-i18n="dir_desc">Recherchez un agent actif par organisation, direction ou service pour ouvrir un échange chiffré.</p>
+              </div>
+              <button type="button" id="btnDirNewGroup" class="btn btn-primary btn-sm" onclick="openCreateGroupModal()" hidden>
+                <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true">
+                  <line x1="12" y1="5" x2="12" y2="19"/>
+                  <line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+                <span>Nouveau groupe de service</span>
+              </button>
+            </div>
+
+            <div class="filter-bar">
+              <input type="search" id="dirSearchInput" class="form-input" placeholder="Nom, matricule ou fonction..." oninput="loadDirectoryView()">
+              <select id="dirOrgSelect" class="form-select" aria-label="Filtrer par organisation" onchange="onDirectoryOrgChange()">
+                <option value="">Toutes les organisations</option>
+              </select>
+              <select id="dirDirectionSelect" class="form-select" aria-label="Filtrer par direction" onchange="onDirectoryDirectionChange()">
+                <option value="">Toutes les directions</option>
+              </select>
+              <select id="dirServiceSelect" class="form-select" aria-label="Filtrer par service" onchange="loadDirectoryView()">
+                <option value="">Tous les services</option>
+              </select>
+            </div>
+
+            <div id="dirIncludeAllWrap" style="margin-bottom: 12px;" hidden>
+              <label style="display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-xs); color: var(--text-secondary); cursor: pointer;">
+                <input type="checkbox" id="dirIncludeAllCheck" onchange="loadDirectoryView()" style="width: 16px; height: 16px; accent-color: var(--brand);">
+                <span>Afficher également les comptes invités, suspendus ou révoqués</span>
+              </label>
+            </div>
+
+            <div id="directoryList" class="compact-list"></div>
           </div>
-        </div>
+        </section>
 
-        <!-- Flux de messages -->
-        <div id="chatMessages" class="chat-messages">
-          <!-- Bulles générées dynamiquement -->
-        </div>
+        <!-- ================================================================ -->
+        <!-- VUE 3 : INSTRUCTIONS ADMINISTRATIVES & SUIVI                     -->
+        <!-- ================================================================ -->
+        <section id="viewInstructions" class="page-view" aria-label="Instructions administratives" hidden>
+          <div class="page-inner">
+            <div class="page-header">
+              <div>
+                <h1 class="page-title" data-i18n="inst_title">Instructions administratives</h1>
+                <p class="page-desc" data-i18n="inst_desc">Suivi formel des instructions de service : consultation, confirmation signée Ed25519 et exécution.</p>
+              </div>
+              <button type="button" id="btnPageNewInst" class="btn btn-primary btn-sm" onclick="openInstructionModal()" hidden>
+                <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true">
+                  <line x1="12" y1="5" x2="12" y2="19"/>
+                  <line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+                <span data-i18n="btn_new_instruction">Nouvelle instruction</span>
+              </button>
+            </div>
 
-        <!-- Barre de saisie inférieure WhatsApp -->
-        <div class="chat-footer">
-          <div class="footer-actions">
-            <button class="btn-action-pill" onclick="openInstructionModal()">
-              <svg viewBox="0 0 24 24"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm2 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
-              <span data-i18n="btn_make_instruction">Instruction de service</span>
-            </button>
-            <button class="btn-action-pill" onclick="document.getElementById('fileUploadInput').click()">
-              <svg viewBox="0 0 24 24"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg>
-              <span data-i18n="btn_attach">Document chiffré</span>
-            </button>
-            <input type="file" id="fileUploadInput" style="display: none;" onchange="handleFileUpload(event)">
+            <div class="kpi-strip">
+              <div class="kpi-item">
+                <div class="kpi-label">Publiées actives</div>
+                <div id="kpiInstPublished" class="kpi-val">0</div>
+              </div>
+              <div class="kpi-item">
+                <div class="kpi-label">À traiter par moi</div>
+                <div id="kpiInstMinePending" class="kpi-val amber">0</div>
+              </div>
+              <div class="kpi-item">
+                <div class="kpi-label">Confirmations reçues</div>
+                <div id="kpiInstAckRatio" class="kpi-val brand">0 / 0</div>
+              </div>
+              <div class="kpi-item">
+                <div class="kpi-label">En retard</div>
+                <div id="kpiInstOverdue" class="kpi-val danger">0</div>
+              </div>
+            </div>
+
+            <div class="segmented-tabs" role="tablist" aria-label="Filtres des instructions">
+              <button type="button" class="seg-btn active" data-inst-filter="ALL" onclick="setInstructionFilter('ALL')">Toutes</button>
+              <button type="button" class="seg-btn" data-inst-filter="TO_ACT" onclick="setInstructionFilter('TO_ACT')">À traiter</button>
+              <button type="button" class="seg-btn" data-inst-filter="ISSUED" onclick="setInstructionFilter('ISSUED')">Émises par moi</button>
+              <button type="button" class="seg-btn" data-inst-filter="OVERDUE" onclick="setInstructionFilter('OVERDUE')">En retard</button>
+              <button type="button" class="seg-btn" id="btnFilterDrafts" data-inst-filter="DRAFTS" onclick="setInstructionFilter('DRAFTS')" hidden>Brouillons</button>
+              <button type="button" class="seg-btn" data-inst-filter="CLOSED" onclick="setInstructionFilter('CLOSED')">Clôturées / Annulées</button>
+            </div>
+
+            <div id="instructionsList" class="compact-list"></div>
           </div>
+        </section>
 
-          <div class="input-row">
-            <input type="text" id="chatInput" class="chat-input" placeholder="Message officiel chiffré..." onkeydown="if(event.key==='Enter') sendTextMessage()">
-            <button class="btn-send" onclick="sendTextMessage()" title="Envoyer">
-              <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-            </button>
+        <!-- ================================================================ -->
+        <!-- VUE 4 : CENTRE DE NOTIFICATIONS INTERNES                         -->
+        <!-- ================================================================ -->
+        <section id="viewNotifications" class="page-view" aria-label="Centre de notifications" hidden>
+          <div class="page-inner">
+            <div class="page-header">
+              <div>
+                <h1 class="page-title" data-i18n="notif_title">Centre de notifications</h1>
+                <p class="page-desc" data-i18n="notif_desc">Événements internes persistés sans contenu confidentiel en clair.</p>
+              </div>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="markAllNotificationsAsRead()">
+                <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                <span data-i18n="btn_mark_all_read">Tout marquer comme lu</span>
+              </button>
+            </div>
+
+            <div class="inline-alert" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; background-color: var(--bg-subtle);">
+              <div>
+                <strong style="font-weight: var(--fw-semibold);">Notifications système du navigateur (opt-in)</strong>
+                <div class="form-hint" style="margin-top: 2px;">
+                  Affiche une alerte générique locale uniquement lorsque l'application est ouverte (aucun service Web Push tiers).
+                </div>
+              </div>
+              <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-weight: var(--fw-medium);">
+                <input type="checkbox" id="browserNotifToggle" onchange="toggleBrowserNotifications(event)" style="width: 18px; height: 18px; accent-color: var(--brand);">
+                <span>Activer</span>
+              </label>
+            </div>
+
+            <div id="notificationsList" class="compact-list"></div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <!-- ==================================================================== -->
-      <!-- VUE 2 : INSTRUCTIONS ADMINISTRATIVES (FORMAT CARTES RESPONSIVE)       -->
-      <!-- ==================================================================== -->
-      <section id="viewInstructions" class="view-panel" style="display: none;">
-        <div class="view-header">
-          <h1 class="view-title">Instructions Administratives & Suivi</h1>
-          <p class="view-desc">Suivi formel avec horodatage et accusé de lecture signé.</p>
-        </div>
+        <!-- ================================================================ -->
+        <!-- VUE 5 : ADMINISTRATION, SÉCURITÉ & JOURNAL D'AUDIT               -->
+        <!-- ================================================================ -->
+        <section id="viewAdmin" class="page-view" aria-label="Administration et sécurité" hidden>
+          <div class="page-inner">
+            <div class="page-header">
+              <div>
+                <h1 class="page-title" data-i18n="admin_title">Administration, sécurité et audit</h1>
+                <p class="page-desc" data-i18n="admin_desc">Gestion du cycle de vie des comptes, révocation immédiate et traçabilité immuable.</p>
+              </div>
+              <button type="button" id="btnInviteAgent" class="btn btn-primary btn-sm" onclick="openInviteModal()" hidden>
+                <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+                  <circle cx="9" cy="7" r="4"/>
+                  <line x1="19" y1="8" x2="19" y2="14"/>
+                  <line x1="22" y1="11" x2="16" y2="11"/>
+                </svg>
+                <span>Inviter un agent</span>
+              </button>
+            </div>
 
-        <div class="dashboard-cards">
-          <div class="kpi-card">
-            <div class="kpi-title">Instructions</div>
-            <div id="kpiTotalInstructions" class="kpi-value">0</div>
+            <!-- Sous-onglets Administration -->
+            <div class="segmented-tabs" role="tablist">
+              <button type="button" class="seg-btn active" data-admin-tab="users" onclick="switchAdminSubTab('users')">Comptes et révocation</button>
+              <button type="button" class="seg-btn" data-admin-tab="audit" onclick="switchAdminSubTab('audit')">Journal d'audit</button>
+              <button type="button" class="seg-btn" data-admin-tab="proofs" onclick="switchAdminSubTab('proofs')">Vérification serveur (Jury)</button>
+            </div>
+
+            <!-- Panneau code d'activation affiché une seule fois après création -->
+            <div id="oneTimeInviteResult" class="inline-alert warning" hidden>
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px;">
+                <strong style="font-weight: var(--fw-semibold);">Code d'activation à usage unique généré (valable 72 h)</strong>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('oneTimeInviteResult').hidden = true">Fermer</button>
+              </div>
+              <p style="margin-bottom: 8px;">
+                Aucun envoi d'e-mail n'est effectué (absence volontaire de serveur SMTP tiers). Transmettez ce code en main propre ou par canal administratif officiel à <strong id="invitedTargetLabel"></strong>. Il ne sera plus jamais affiché.
+              </p>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <div id="invitedOneTimeCode" class="code-display" style="flex: 1;"></div>
+                <button type="button" class="btn btn-primary btn-sm" onclick="copyTextFromEl('invitedOneTimeCode')">Copier le code</button>
+              </div>
+            </div>
+
+            <!-- Sous-vue 5A : Comptes -->
+            <div id="adminSubUsers">
+              <div id="adminUsersList" class="compact-list"></div>
+            </div>
+
+            <!-- Sous-vue 5B : Journal d'audit -->
+            <div id="adminSubAudit" hidden>
+              <div class="filter-bar">
+                <select id="auditFilterSelect" class="form-select" aria-label="Filtrer par type d'événement" onchange="loadAuditLogsView()">
+                  <option value="">Tous les événements de sécurité</option>
+                  <option value="INTRUSION_ATTEMPT">INTRUSION_ATTEMPT (Intrus rejeté)</option>
+                  <option value="AUTH_SUCCESS_SESSION_CREATED">AUTH_SUCCESS_SESSION_CREATED</option>
+                  <option value="AUTH_FAIL_2FA">AUTH_FAIL_2FA</option>
+                  <option value="ACCOUNT_INVITED">ACCOUNT_INVITED</option>
+                  <option value="ACCOUNT_ACTIVATED">ACCOUNT_ACTIVATED</option>
+                  <option value="AGENT_SUSPENDED">AGENT_SUSPENDED</option>
+                  <option value="AGENT_REACTIVATED">AGENT_REACTIVATED</option>
+                  <option value="AGENT_REVOKED">AGENT_REVOKED</option>
+                  <option value="INSTRUCTION_CREATED">INSTRUCTION_CREATED</option>
+                  <option value="INSTRUCTION_VERSIONED">INSTRUCTION_VERSIONED</option>
+                  <option value="UNAUTHORIZED_FILE_ACCESS">UNAUTHORIZED_FILE_ACCESS</option>
+                </select>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="loadAuditLogsView()">Actualiser</button>
+              </div>
+              <div id="auditLogsList" class="compact-list"></div>
+            </div>
+
+            <!-- Sous-vue 5C : Preuves techniques pour le jury -->
+            <div id="adminSubProofs" hidden>
+              <div class="compact-list">
+                <div class="list-row">
+                  <div class="list-row-main">
+                    <div class="list-row-title">Épreuve « Intrus » (Compte non préalablement enrôlé)</div>
+                    <div class="list-row-sub">Envoie une tentative d'authentification avec un matricule inconnu et vérifie le rejet HTTP 403 ainsi que la trace d'audit.</div>
+                  </div>
+                  <div class="list-row-actions">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="runIntruderProof()">Exécuter le test 403</button>
+                  </div>
+                </div>
+                <div class="list-row">
+                  <div class="list-row-main">
+                    <div class="list-row-title">Épreuve « Serveur Aveugle » (Inspection brute SQLite)</div>
+                    <div class="list-row-sub">Interroge les tables SQLite du serveur pour vérifier que seuls des ciphertexts Megolm, des blobs AES-256-GCM et des clés publiques Olm y figurent.</div>
+                  </div>
+                  <div class="list-row-actions">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="runBlindServerInspection()">Inspecter SQLite</button>
+                  </div>
+                </div>
+              </div>
+              <pre id="adminProofOutput" class="proof-pre" hidden></pre>
+            </div>
+
           </div>
-          <div class="kpi-card">
-            <div class="kpi-title">Taux de Prise</div>
-            <div id="kpiAckRate" class="kpi-value">0%</div>
-          </div>
-          <div class="kpi-card">
-            <div class="kpi-title">En Attente</div>
-            <div id="kpiPendingInstructions" class="kpi-value" style="color: var(--status-pending);">0</div>
-          </div>
-        </div>
+        </section>
 
-        <!-- Liste des Instructions sous forme de Cartes (Zéro Scroll Horizontal) -->
-        <div id="instructionsCardsList" class="cards-list"></div>
-      </section>
+      </div>
+    </div>
 
-      <!-- ==================================================================== -->
-      <!-- VUE 3 : CONSOLE SÉCURITÉ & RÉVOCATION (FORMAT CARTES RESPONSIVE)      -->
-      <!-- ==================================================================== -->
-      <section id="viewSecurity" class="view-panel" style="display: none;">
-        <div class="view-header">
-          <h1 class="view-title">Console de Sécurité & Révocation</h1>
-          <p class="view-desc">Épreuves de conformité pour le jury : rejet d'intrus, zéro fuite SQL et révocation en direct.</p>
-        </div>
+    <!-- Barre de navigation inférieure Mobile (< 900px) -->
+    <nav class="mobile-nav" aria-label="Navigation principale mobile">
+      <button type="button" id="mobChat" class="mobile-nav-btn active" onclick="switchMainView('chat')">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        </svg>
+        <span data-i18n="nav_chat">Discussions</span>
+        <span id="badgeChatMobile" class="nav-badge" hidden>0</span>
+      </button>
 
-        <div class="dashboard-cards">
-          <div class="kpi-card">
-            <div class="kpi-title">Épreuve Intrus</div>
-            <p style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 8px;">Rejet automatique 403 d'un intrus non enrôlé.</p>
-            <button class="btn-secondary" onclick="simulateIntruderTest()">Lancer Test Intrus</button>
-          </div>
-          <div class="kpi-card">
-            <div class="kpi-title">Serveur Aveugle</div>
-            <p style="font-size: 11.5px; color: var(--text-secondary); margin-bottom: 8px;">Inspection SQL pour prouver l'absence de clair.</p>
-            <button class="btn-secondary" onclick="inspectServerDatabase()">Inspecter Base SQL</button>
-          </div>
-        </div>
+      <button type="button" id="mobDirectory" class="mobile-nav-btn" onclick="switchMainView('directory')">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+          <circle cx="9" cy="7" r="4"/>
+          <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+        <span data-i18n="nav_directory">Annuaire</span>
+      </button>
 
-        <div class="view-header" style="margin-top: 18px;">
-          <h2 style="font-size: 14.5px; font-weight: 600;">Contrôle d'Accès & Révocation Immédiate</h2>
-          <p class="view-desc">Cliquez sur « Révoquer » pour couper instantanément la session d'un agent.</p>
-        </div>
+      <button type="button" id="mobInstructions" class="mobile-nav-btn" onclick="switchMainView('instructions')">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+          <rect width="8" height="4" x="8" y="2" rx="1" ry="1"/>
+          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+        </svg>
+        <span data-i18n="nav_instructions">Instructions</span>
+        <span id="badgeInstMobile" class="nav-badge" hidden>0</span>
+      </button>
 
-        <!-- Liste des Utilisateurs sous forme de Cartes (Zéro Scroll Horizontal) -->
-        <div id="usersCardsList" class="cards-list"></div>
+      <button type="button" id="mobNotifications" class="mobile-nav-btn" onclick="switchMainView('notifications')">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
+          <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
+        </svg>
+        <span data-i18n="nav_notifications">Alertes</span>
+        <span id="badgeNotifMobile" class="nav-badge" hidden>0</span>
+      </button>
 
-        <div id="securityProofOutput" style="display: none; margin-top: 16px; background: var(--bg-header); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 12px;">
-          <div style="font-size: 11px; font-weight: 700; color: var(--wa-green); margin-bottom: 4px;">Preuve d'Exécution :</div>
-          <pre id="securityProofCode" style="font-family: monospace; font-size: 11px; color: var(--text-primary); overflow-x: auto; max-height: 220px;"></pre>
-        </div>
-      </section>
+      <button type="button" id="mobAdmin" class="mobile-nav-btn" onclick="switchMainView('admin')" hidden>
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+        <span data-i18n="nav_admin">Admin</span>
+      </button>
+    </nav>
 
-      <!-- ==================================================================== -->
-      <!-- VUE 4 : JOURNAL D'AUDIT IMMUABLE (FORMAT CARTES RESPONSIVE)          -->
-      <!-- ==================================================================== -->
-      <section id="viewAudit" class="view-panel" style="display: none;">
-        <div class="view-header">
-          <h1 class="view-title">Journal d'Audit Immuable de Sécurité</h1>
-          <p class="view-desc">Traces horodatées des événements d'authentification, de rejet et de révocation.</p>
-        </div>
-
-        <!-- Liste d'Audit sous forme de Cartes (Zéro Scroll Horizontal) -->
-        <div id="auditCardsList" class="cards-list"></div>
-      </section>
-
-    </main>
   </div>
 
   <!-- ==================================================================== -->
-  <!-- 4. BARRE DE NAVIGATION INFÉRIEURE MOBILE (LABELS COURTS & ÉPURÉS)    -->
-  <!-- ==================================================================== -->
-  <nav class="mobile-bottom-nav">
-    <button id="btnMobileChat" class="bottom-nav-item active" onclick="switchView('chat')">
-      <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
-      <span>Discussions</span>
-    </button>
-    <button id="btnMobileInst" class="bottom-nav-item" onclick="switchView('instructions')">
-      <svg viewBox="0 0 24 24"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm2 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
-      <span>Instructions</span>
-    </button>
-    <button id="btnMobileSec" class="bottom-nav-item" onclick="switchView('security')">
-      <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
-      <span>Sécurité</span>
-    </button>
-    <button id="btnMobileAudit" class="bottom-nav-item" onclick="switchView('audit')">
-      <svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
-      <span>Audit</span>
-    </button>
-  </nav>
-
-  <!-- ==================================================================== -->
-  <!-- 5. MODALES                                                           -->
+  <!-- 3. MODALES RÉUTILISABLES & MÉTIER                                    -->
   <!-- ==================================================================== -->
 
-  <!-- Modal 2FA -->
-  <div id="modal2FA" class="modal-overlay" style="display: none;">
-    <div class="modal-dialog">
-      <div class="modal-title" data-i18n="modal_2fa_title">Authentification Sécurisée (2FA)</div>
-      <div class="modal-desc" data-i18n="modal_2fa_desc">Entrez le code à 6 chiffres généré par votre application d'authentification.</div>
-
-      <div class="form-group">
-        <label class="form-label">Compte :</label>
-        <div id="modal2FAUserName" style="font-size: 13px; font-weight: 600; color: var(--wa-green);">Dr. Salif Ouédraogo</div>
+  <!-- Modale : Créer / Modifier une Instruction Administrative -->
+  <div id="modalInstructionForm" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalInstFormTitle" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="modalInstFormTitle" class="modal-title">Nouvelle instruction administrative</h2>
+        <button type="button" class="btn-icon" aria-label="Fermer la fenêtre" onclick="closeModal('modalInstructionForm')">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
       </div>
+      <form id="formInstruction" onsubmit="submitInstructionForm(event)">
+        <div class="modal-body">
+          <input type="hidden" id="instEditId" value="">
+          <input type="hidden" id="instEditMode" value="create">
+          <div id="instFormNotice" class="inline-alert warning" hidden></div>
 
-      <div class="form-group">
-        <label class="form-label">Code TOTP (6 chiffres) :</label>
-        <input type="text" id="inputTotpCode" class="form-input" placeholder="ex. 123456" maxlength="6" autofocus>
-      </div>
+          <div class="form-group" id="instGroupSelectWrap">
+            <label class="form-label" for="instTargetGroup">Canal / Groupe de diffusion</label>
+            <select id="instTargetGroup" class="form-select" onchange="loadInstructionRecipientChoices()" required></select>
+          </div>
 
-      <div class="modal-actions">
-        <button class="btn-secondary" onclick="fillDemoTotp()" data-i18n="btn_demo_2fa">Insérer Code Démo</button>
-        <button class="btn-primary" onclick="submit2FALogin()" data-i18n="btn_validate_2fa">Valider</button>
-      </div>
+          <div class="form-group">
+            <label class="form-label" for="instTitleInput">Objet de l'instruction (chiffré de bout en bout)</label>
+            <input type="text" id="instTitleInput" class="form-input" placeholder="ex. Transmission de l'état d'avancement trimestriel" required>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="instBodyInput">Consignes détaillées (chiffrées de bout en bout)</label>
+            <textarea id="instBodyInput" class="form-textarea" placeholder="Précisez le périmètre, les livrables attendus et les modalités de compte rendu..."></textarea>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div class="form-group">
+              <label class="form-label" for="instPrioritySelect">Priorité</label>
+              <select id="instPrioritySelect" class="form-select">
+                <option value="NORMALE">Normale</option>
+                <option value="HAUTE">Haute</option>
+                <option value="URGENTE">Urgente</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="instDeadlineInput">Échéance (optionnelle)</label>
+              <input type="datetime-local" id="instDeadlineInput" class="form-input">
+            </div>
+          </div>
+
+          <div class="form-group" id="instRecipientsWrap">
+            <label class="form-label">Destinataires désignés (émetteur exclu automatiquement)</label>
+            <div id="instRecipientsList" class="checkbox-list"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('modalInstructionForm')">Annuler</button>
+          <button type="submit" id="btnSaveDraftInst" class="btn btn-secondary" data-submit-mode="draft" onclick="window._instSubmitMode='draft'">
+            Enregistrer en brouillon
+          </button>
+          <button type="submit" id="btnPublishInst" class="btn btn-primary" data-submit-mode="publish" onclick="window._instSubmitMode='publish'">
+            Publier l'instruction
+          </button>
+        </div>
+      </form>
     </div>
   </div>
 
-  <!-- Modal Instruction -->
-  <div id="modalInstruction" class="modal-overlay" style="display: none;">
-    <div class="modal-dialog">
-      <div class="modal-title">Émettre une instruction de service</div>
-      <div class="modal-desc">Cette instruction sera structurée, chiffrée et fera l'objet d'un accusé de lecture obligatoire.</div>
-
-      <div class="form-group">
-        <label class="form-label">Objet de l'instruction :</label>
-        <input type="text" id="instructionTitleInput" class="form-input" placeholder="ex. Transmission du rapport avant vendredi 16h">
+  <!-- Modale : Détail, Suivi & Historique d'une Instruction -->
+  <div id="modalInstructionDetail" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalInstDetailTitle" hidden>
+    <div class="modal-card wide">
+      <div class="modal-header">
+        <h2 id="modalInstDetailTitle" class="modal-title">Détail de l'instruction</h2>
+        <button type="button" class="btn-icon" aria-label="Fermer le détail" onclick="closeModal('modalInstructionDetail')">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
       </div>
-
-      <div class="form-group">
-        <label class="form-label">Échéance d'exécution :</label>
-        <input type="datetime-local" id="instructionDeadlineInput" class="form-input">
-      </div>
-
-      <div class="modal-actions">
-        <button class="btn-secondary" onclick="closeInstructionModal()">Annuler</button>
-        <button class="btn-primary" onclick="submitInstruction()">Émettre l'instruction</button>
-      </div>
+      <div id="modalInstDetailBody" class="modal-body"></div>
+      <div id="modalInstDetailFooter" class="modal-footer"></div>
     </div>
   </div>
 
-  <!-- Scripts -->
+  <!-- Modale : Infos du Message (Statuts par destinataire) -->
+  <div id="modalMessageInfo" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalMsgInfoTitle" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="modalMsgInfoTitle" class="modal-title">Informations du message</h2>
+        <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalMessageInfo')">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="modalMsgInfoBody" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Modale : Infos de la Conversation & Gestion des Membres -->
+  <div id="modalConversationInfo" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalConvInfoTitle" hidden>
+    <div class="modal-card wide">
+      <div class="modal-header">
+        <h2 id="modalConvInfoTitle" class="modal-title">Paramètres et membres</h2>
+        <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalConversationInfo')">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="modalConvInfoBody" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Modale : Création d'un Groupe de Travail -->
+  <div id="modalCreateGroup" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalCreateGroupTitle" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="modalCreateGroupTitle" class="modal-title">Créer un groupe de service</h2>
+        <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalCreateGroup')">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <form onsubmit="submitCreateGroup(event)">
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label" for="newGroupName">Nom du groupe</label>
+            <input type="text" id="newGroupName" class="form-input" minlength="3" placeholder="ex. Cellule de Coordination Budgétaire" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="newGroupDesc">Objet / Description</label>
+            <input type="text" id="newGroupDesc" class="form-input" placeholder="ex. Suivi opérationnel et échanges chiffrés">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="newGroupService">Service de rattachement</label>
+            <select id="newGroupService" class="form-select"></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Membres initiaux à inclure</label>
+            <div id="newGroupMembersList" class="checkbox-list"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('modalCreateGroup')">Annuler</button>
+          <button type="submit" class="btn btn-primary">Créer le groupe</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modale : Invitation d'un Nouvel Agent (ADMIN uniquement) -->
+  <div id="modalInviteAgent" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalInviteTitle" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="modalInviteTitle" class="modal-title">Enrôler et inviter un agent</h2>
+        <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalInviteAgent')">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <form onsubmit="submitInviteAgent(event)">
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label" for="invMatricule">Matricule administratif</label>
+            <input type="text" id="invMatricule" class="form-input" placeholder="ex. FASO-AGT-12" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="invFullName">Nom complet (fictif en démonstration)</label>
+            <input type="text" id="invFullName" class="form-input" placeholder="ex. Mariam Zongo" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="invJobTitle">Fonction / Poste</label>
+            <input type="text" id="invJobTitle" class="form-input" placeholder="ex. Chargée d'études numériques">
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div class="form-group">
+              <label class="form-label" for="invRole">Rôle habilité</label>
+              <select id="invRole" class="form-select" required>
+                <option value="AGENT">AGENT</option>
+                <option value="CHEF_SERVICE">CHEF_SERVICE</option>
+                <option value="DIRECTEUR">DIRECTEUR</option>
+                <option value="ADMIN">ADMIN</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="invServiceId">Service d'affectation</label>
+              <select id="invServiceId" class="form-select" required></select>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('modalInviteAgent')">Annuler</button>
+          <button type="submit" class="btn btn-primary">Générer le code d'activation</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modale : Confirmation d'action sensible (Suspension / Révocation / Déclaration d'exécution) -->
+  <div id="modalActionConfirm" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalActionTitle" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="modalActionTitle" class="modal-title">Confirmation</h2>
+        <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalActionConfirm')">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <form onsubmit="submitActionConfirm(event)">
+        <div class="modal-body">
+          <p id="modalActionDesc" style="margin-bottom: 12px; color: var(--text-secondary);"></p>
+          <div class="form-group" id="modalActionInputWrap">
+            <label id="modalActionInputLabel" class="form-label" for="modalActionInput">Motif officiel</label>
+            <input type="text" id="modalActionInput" class="form-input">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('modalActionConfirm')">Annuler</button>
+          <button type="submit" id="modalActionSubmitBtn" class="btn btn-primary">Confirmer</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Région de notifications éphémères (Toasts) -->
+  <div id="toastRegion" class="toast-region" aria-live="polite"></div>
+
+  <!-- Scripts locaux exclusivement -->
   <script src="js/i18n.js"></script>
   <script src="js/crypto-client.js"></script>
   <script src="js/api.js"></script>
