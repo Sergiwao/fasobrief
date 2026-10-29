@@ -33,6 +33,7 @@ const AppState = {
   openInstructionId: null,
   unreadNotifications: 0,
   actionConfirmHandler: null,
+  modalTriggerStack: [],
   wsBound: false
 };
 
@@ -49,8 +50,23 @@ const Icons = {
   checkDoubleGreen: `<svg class="icon icon-sm" viewBox="0 0 24 24" aria-label="Lu par tous les destinataires"><path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/></svg>`,
   lock: `<svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
   file: `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>`,
-  users: `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`
+  users: `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
+  chevronRight: `<svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>`
 };
+
+function renderSkeletonPlaceholder(rows = 3) {
+  let html = '<div class="skeleton-wrap" aria-busy="true" aria-label="Chargement en cours">';
+  for (let i = 0; i < rows; i += 1) {
+    html += `
+      <div>
+        <div class="skeleton-line w-60" style="margin-bottom:6px;"></div>
+        <div class="skeleton-line w-85"></div>
+      </div>
+    `;
+  }
+  html += '</div>';
+  return html;
+}
 
 // ============================================================================
 // INITIALISATION AU DÉMARRAGE
@@ -64,26 +80,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   syncLanguageButtons(savedLang);
   setLanguage(savedLang);
 
-  // 2. Masquage sobre du splash screen
-  const prefersReduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const splash = document.getElementById('splashScreen');
-  if (splash) {
-    const delay = prefersReduced || sessionStorage.getItem('fasobrief_splash_seen') ? 40 : 380;
-    sessionStorage.setItem('fasobrief_splash_seen', '1');
-    setTimeout(() => {
-      splash.style.opacity = '0';
-      setTimeout(() => {
-        splash.hidden = true;
-      }, prefersReduced ? 0 : 200);
-    }, delay);
-  }
-
-  // 3. Initialiser WebAssembly @matrix-org/olm
+  // 2. Initialiser WebAssembly @matrix-org/olm puis libérer immédiatement l'écran d'ouverture (zéro délai artificiel)
   try {
     await window.FasoCrypto.init();
   } catch (err) {
     console.error('[CRYPTO] Échec chargement Olm :', err);
     showToast('Erreur de chargement du module cryptographique Olm.', 'error');
+  }
+
+  const splash = document.getElementById('splashScreen');
+  if (splash) {
+    splash.style.opacity = '0';
+    setTimeout(() => {
+      splash.hidden = true;
+    }, 120);
   }
 
   // 4. Écouteurs globaux (WebSocket, visibilité d'onglet, fermeture menus/modales)
@@ -178,22 +188,74 @@ function setupGlobalListeners() {
   if (AppState.wsBound) return;
   AppState.wsBound = true;
 
-  // Fermer le menu profil au clic extérieur
+  // Fermer le menu profil ou une feuille modale au clic extérieur (backdrop)
   document.addEventListener('click', (e) => {
     const btn = document.getElementById('userMenuBtn');
     const menu = document.getElementById('userDropdown');
     if (menu && !menu.hidden && btn && !btn.contains(e.target) && !menu.contains(e.target)) {
       closeUserDropdown();
     }
+    if (e.target && e.target.classList && e.target.classList.contains('modal-backdrop') && !e.target.hidden) {
+      closeModal(e.target.id);
+    }
   });
 
-  // Touche Échap pour fermer les modales
+  // Piège de focus dans les modales (WCAG 2.2), touche Échap & raccourcis clavier iPadOS/Desktop
   document.addEventListener('keydown', (e) => {
+    const openModals = Array.from(document.querySelectorAll('.modal-backdrop:not([hidden])'));
+    const topModal = openModals.length > 0 ? openModals[openModals.length - 1] : null;
+
     if (e.key === 'Escape') {
       closeUserDropdown();
-      document.querySelectorAll('.modal-backdrop:not([hidden])').forEach((m) => {
-        m.hidden = true;
-      });
+      if (topModal) {
+        e.preventDefault();
+        closeModal(topModal.id);
+      }
+      return;
+    }
+
+    if (topModal && e.key === 'Tab') {
+      const focusables = Array.from(
+        topModal.querySelectorAll('button:not([disabled]):not([hidden]), input:not([disabled]):not([hidden]), select:not([disabled]):not([hidden]), textarea:not([disabled]):not([hidden]), [href]')
+      ).filter((el) => el.offsetParent !== null);
+      if (focusables.length > 0) {
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+      return;
+    }
+
+    if (topModal || document.getElementById('appShell').hidden) return;
+
+    const tag = (document.activeElement && document.activeElement.tagName) || '';
+    const isTyping = ['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || (document.activeElement && document.activeElement.isContentEditable);
+
+    // Raccourci '/' : cibler la recherche de la vue courante (hors champ de saisie)
+    if (!isTyping && e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const searchId = AppState.currentView === 'directory' ? 'dirSearchInput' : (AppState.currentView === 'chat' ? 'convSearchInput' : null);
+      const searchEl = searchId ? document.getElementById(searchId) : null;
+      if (searchEl && searchEl.offsetParent !== null) {
+        e.preventDefault();
+        searchEl.focus();
+      }
+      return;
+    }
+
+    // Raccourcis 'Alt+1..5' : bascule rapide entre sections principales
+    if (e.altKey && !e.ctrlKey && !e.metaKey) {
+      const shortcutViews = { '1': 'chat', '2': 'directory', '3': 'instructions', '4': 'notifications', '5': 'admin' };
+      const targetView = shortcutViews[e.key];
+      if (targetView) {
+        e.preventDefault();
+        switchMainView(targetView);
+      }
     }
   });
 
@@ -767,9 +829,15 @@ function switchMainView(view) {
   Object.entries(navMap).forEach(([k, ids]) => {
     ids.forEach((id) => {
       const btn = document.getElementById(id);
-      if (btn) btn.classList.toggle('active', k === view);
+      if (btn) {
+        btn.classList.toggle('active', k === view);
+        if (k === view) btn.setAttribute('aria-current', 'page');
+        else btn.removeAttribute('aria-current');
+      }
     });
   });
+
+  syncMobileContextFab();
 
   if (view === 'chat') {
     loadConversations({ keepSelection: true });
@@ -782,6 +850,40 @@ function switchMainView(view) {
     loadNotificationsView();
   } else if (view === 'admin') {
     loadAdminView();
+  }
+}
+
+function syncMobileContextFab() {
+  const fab = document.getElementById('mobileContextFab');
+  const label = document.getElementById('mobileContextFabLabel');
+  if (!fab || !label || !FasoApi.currentUser) return;
+
+  const role = FasoApi.currentUser.role;
+  const canLead = ['ADMIN', 'DIRECTEUR', 'CHEF_SERVICE'].includes(role);
+  const view = AppState.currentView;
+
+  if (view === 'chat') {
+    fab.hidden = false;
+    label.textContent = 'Nouveau message';
+  } else if (view === 'instructions' && canLead) {
+    fab.hidden = false;
+    label.textContent = 'Instruction';
+  } else if (view === 'admin' && role === 'ADMIN') {
+    fab.hidden = false;
+    label.textContent = 'Inviter';
+  } else {
+    fab.hidden = true;
+  }
+}
+
+function triggerMobileContextFab() {
+  const view = AppState.currentView;
+  if (view === 'chat') {
+    switchMainView('directory');
+  } else if (view === 'instructions') {
+    openInstructionModal();
+  } else if (view === 'admin') {
+    openInviteModal();
   }
 }
 
@@ -1006,9 +1108,11 @@ async function loadActiveConversationMessages({ preserveScroll = false } = {}) {
       container.appendChild(empty);
     }
 
+    let prevMsg = null;
     for (const msg of messages) {
-      const node = await buildMessageDomNode(groupId, msg);
+      const node = await buildMessageDomNode(groupId, msg, prevMsg);
       container.appendChild(node);
+      prevMsg = msg;
     }
 
     // Afficher également les éventuels messages échoués côté réseau pour permettre un renvoi sans doublon
@@ -1030,14 +1134,24 @@ async function loadActiveConversationMessages({ preserveScroll = false } = {}) {
   }
 }
 
-async function buildMessageDomNode(groupId, msg) {
+async function buildMessageDomNode(groupId, msg, prevMsg = null) {
   const isMe = FasoApi.currentUser && msg.sender_id === FasoApi.currentUser.id;
+  const sameSenderRecent = Boolean(
+    prevMsg &&
+    prevMsg.sender_id === msg.sender_id &&
+    prevMsg.message_type !== 'INSTRUCTION' &&
+    msg.message_type !== 'INSTRUCTION' &&
+    Math.abs(new Date(msg.created_at).getTime() - new Date(prevMsg.created_at).getTime()) < 3 * 60 * 1000
+  );
+
   const row = document.createElement('div');
-  row.className = `msg-row ${isMe ? 'sent' : 'received'}`;
+  row.className = `msg-row ${isMe ? 'sent' : 'received'}${sameSenderRecent ? ' grouped-prev' : ''}`;
   row.dataset.messageId = msg.id;
 
   const dec = await FasoCrypto.decryptPayload(groupId, msg);
-  const senderLabel = !isMe ? `<div class="msg-sender">${escapeHtml(msg.sender_name || 'Agent')}</div>` : '';
+  const senderLabel = (!isMe && !sameSenderRecent)
+    ? `<div class="msg-sender">${escapeHtml(msg.sender_name || 'Agent')}</div>`
+    : '';
   const timeStr = formatTimeOnly(msg.created_at);
 
   const canMakeInst =
@@ -1126,7 +1240,7 @@ async function buildMessageDomNode(groupId, msg) {
     : '';
 
   const infoBtn = isMe
-    ? `<button type="button" class="msg-inline-btn" aria-label="Voir le statut par destinataire" onclick="openMessageInfoModal('${escapeAttr(msg.id)}')">Infos</button>`
+    ? `<button type="button" class="msg-inline-btn" aria-label="Infos du message et statuts par destinataire" onclick="openMessageInfoModal('${escapeAttr(msg.id)}')">Infos</button>`
     : '';
 
   const statusHtml = isMe ? renderDeliveryStatusIcon(msg.delivery_status || 'sent') : '';
@@ -1328,7 +1442,7 @@ async function downloadAndDecryptAttachment(messageId) {
 // --- Modale « Infos du message » ---
 async function openMessageInfoModal(messageId) {
   const body = document.getElementById('modalMsgInfoBody');
-  body.innerHTML = `<div class="empty-state">Chargement des accusés de remise...</div>`;
+  body.innerHTML = renderSkeletonPlaceholder(3);
   openModal('modalMessageInfo');
 
   try {
@@ -1388,7 +1502,7 @@ async function openConversationInfoModal() {
   if (!groupId) return;
 
   const body = document.getElementById('modalConvInfoBody');
-  body.innerHTML = `<div class="empty-state">Chargement des détails...</div>`;
+  body.innerHTML = renderSkeletonPlaceholder(4);
   openModal('modalConversationInfo');
 
   try {
@@ -1778,7 +1892,9 @@ function renderInstructionsKpis() {
 function setInstructionFilter(filter) {
   AppState.instFilter = filter;
   document.querySelectorAll('[data-inst-filter]').forEach((btn) => {
-    btn.classList.toggle('active', btn.getAttribute('data-inst-filter') === filter);
+    const isAct = btn.getAttribute('data-inst-filter') === filter;
+    btn.classList.toggle('active', isAct);
+    btn.setAttribute('aria-selected', String(isAct));
   });
   renderInstructionsList();
 }
@@ -1826,27 +1942,27 @@ function renderInstructionsList() {
       : (inst.is_creator ? `<span class="badge">Émetteur</span>` : '');
 
     return `
-      <div class="list-row interactive" role="button" tabindex="0" onclick="openInstructionDetail('${escapeAttr(inst.id)}')" onkeydown="if(event.key==='Enter') openInstructionDetail('${escapeAttr(inst.id)}')">
-        <div class="list-row-main">
-          <div class="list-row-title">
+      <button type="button" class="list-row interactive-btn" onclick="openInstructionDetail('${escapeAttr(inst.id)}')">
+        <span class="list-row-main">
+          <span class="list-row-title">
             <span class="badge badge-mono">${escapeHtml(inst.instruction_ref)}</span>
             <span class="badge">v${Number(inst.version || 1)}</span>
             ${renderInstructionStatusBadge(inst.status)}
             ${prioBadge}
             ${overdueBadge}
             <span>${escapeHtml(inst._decryptedTitle || '[Instruction chiffrée]')}</span>
-          </div>
-          <div class="list-row-sub">
+          </span>
+          <span class="list-row-sub" style="display:block;">
             Canal : ${escapeHtml(inst.group_name)} • Par ${escapeHtml(inst.creator_name)}
             ${inst.deadline ? ` • Échéance : ${escapeHtml(formatDateTime(inst.deadline))}` : ''}
             ${inst.status !== 'BROUILLON' ? ` • Confirmées : ${inst.ack_count}/${inst.total_recipients} • Exécutées : ${inst.executed_count}/${inst.total_recipients}` : ''}
-          </div>
-        </div>
-        <div class="list-row-actions">
+          </span>
+        </span>
+        <span class="list-row-actions">
           ${myStepBadge}
-          <button type="button" class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); openInstructionDetail('${escapeAttr(inst.id)}')">Détail</button>
-        </div>
-      </div>
+          <span class="row-chevron" aria-hidden="true">${Icons.chevronRight}</span>
+        </span>
+      </button>
     `;
   }).join('');
 }
@@ -2099,7 +2215,7 @@ async function openInstructionDetail(instructionId, { skipMarkViewed = false } =
   AppState.openInstructionId = instructionId;
   const body = document.getElementById('modalInstDetailBody');
   const footer = document.getElementById('modalInstDetailFooter');
-  body.innerHTML = `<div class="empty-state">Déchiffrement de l'instruction...</div>`;
+  body.innerHTML = renderSkeletonPlaceholder(4);
   footer.innerHTML = '';
   openModal('modalInstructionDetail');
 
@@ -2358,19 +2474,20 @@ async function loadNotificationsView() {
     }
 
     listEl.innerHTML = items.map((n) => `
-      <div class="list-row interactive ${n.isRead ? '' : 'unread-notif'}" role="button" tabindex="0" onclick="openNotificationTarget('${escapeAttr(n.id)}', '${escapeAttr(n.groupId || '')}', '${escapeAttr(n.instructionId || '')}')" onkeydown="if(event.key==='Enter') openNotificationTarget('${escapeAttr(n.id)}', '${escapeAttr(n.groupId || '')}', '${escapeAttr(n.instructionId || '')}')">
-        <div class="list-row-main">
-          <div class="list-row-title">
+      <button type="button" class="list-row interactive-btn ${n.isRead ? '' : 'unread-notif'}" onclick="openNotificationTarget('${escapeAttr(n.id)}', '${escapeAttr(n.groupId || '')}', '${escapeAttr(n.instructionId || '')}')">
+        <span class="list-row-main">
+          <span class="list-row-title">
             ${!n.isRead ? `<span class="badge badge-green">Non lu</span>` : ''}
             ${n.count > 1 ? `<span class="badge">x${Number(n.count)}</span>` : ''}
             <span>${escapeHtml(n.title)}</span>
-          </div>
-          <div class="list-row-sub">${escapeHtml(n.body)} • ${escapeHtml(formatDateTime(n.updatedAt || n.createdAt))}</div>
-        </div>
-        <div class="list-row-actions">
+          </span>
+          <span class="list-row-sub" style="display:block;">${escapeHtml(n.body)} • ${escapeHtml(formatDateTime(n.updatedAt || n.createdAt))}</span>
+        </span>
+        <span class="list-row-actions">
           <span class="badge">${escapeHtml(n.type)}</span>
-        </div>
-      </div>
+          <span class="row-chevron" aria-hidden="true">${Icons.chevronRight}</span>
+        </span>
+      </button>
     `).join('');
   } catch (err) {
     listEl.innerHTML = `<div class="inline-alert error">${escapeHtml(formatApiError(err.message))}</div>`;
@@ -2447,7 +2564,9 @@ function maybeTriggerBrowserNotification(notif) {
 function switchAdminSubTab(tab) {
   AppState.adminSubTab = tab;
   document.querySelectorAll('[data-admin-tab]').forEach((b) => {
-    b.classList.toggle('active', b.getAttribute('data-admin-tab') === tab);
+    const isAct = b.getAttribute('data-admin-tab') === tab;
+    b.classList.toggle('active', isAct);
+    b.setAttribute('aria-selected', String(isAct));
   });
   document.getElementById('adminSubUsers').hidden = tab !== 'users';
   document.getElementById('adminSubAudit').hidden = tab !== 'audit';
@@ -2666,7 +2785,17 @@ async function runBlindServerInspection() {
 // ============================================================================
 function openModal(id) {
   const el = document.getElementById(id);
-  if (el) el.hidden = false;
+  if (!el) return;
+  if (el.hidden && document.activeElement instanceof HTMLElement) {
+    AppState.modalTriggerStack.push({ id, trigger: document.activeElement });
+  }
+  el.hidden = false;
+  requestAnimationFrame(() => {
+    const first = el.querySelector('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])');
+    if (first && typeof first.focus === 'function') {
+      first.focus();
+    }
+  });
 }
 
 function closeModal(id) {
@@ -2674,6 +2803,15 @@ function closeModal(id) {
   if (el) el.hidden = true;
   if (id === 'modalInstructionDetail') {
     AppState.openInstructionId = null;
+  }
+  for (let i = AppState.modalTriggerStack.length - 1; i >= 0; i -= 1) {
+    if (AppState.modalTriggerStack[i].id === id) {
+      const { trigger } = AppState.modalTriggerStack.splice(i, 1)[0];
+      if (trigger && typeof trigger.focus === 'function' && trigger.offsetParent !== null) {
+        trigger.focus();
+      }
+      break;
+    }
   }
 }
 

@@ -76,10 +76,11 @@ tests sur des systèmes réels, auto-inscription publique.
 
 ## 5. Charte graphique et typographique appliquée
 
-- Fond blanc `#FFFFFF`, surfaces neutres `#F8FAFC`, vert institutionnel `#00705A`, ambre `#B45309`, rouge `#B91C1C` (mode sombre sobre disponible sans dégradé ni glow).
-- Zéro dégradé, zéro emoji, zéro glow, zéro glassmorphism.
-- Police système uniquement ; échelle `12 / 14 / 15 / 17 / 20 px` ; graisses `400 / 500 / 600` uniquement.
-- Icônes SVG Lucide en ligne (`stroke-width="2"`), `aria-label` explicite sur les boutons icônes.
+- Fond blanc `#FFFFFF` sur canevas groupé neutre `#F3F5F8`, vert institutionnel `#00705A` (conteneur tonal `#E6F4F1`), ambre `#B45309`, rouge `#B91C1C` (mode sombre tonal `#0B1120` / `#151F32` sans noir pur `#000000`, sans dégradé ni glow, et support `@media (prefers-contrast: more)`).
+- Zéro dégradé, zéro emoji, zéro glow, zéro glassmorphism, zéro URL externe/CDN.
+- Police système uniquement ; échelle relative `0.75 / 0.875 / 0.9375 / 1.0625 / 1.25 rem` (`12 / 14 / 15 / 17 / 20 px`) compatible zoom navigateur/Dynamic Type ; graisses `400 / 500 / 600` uniquement ; chiffres tabulaires (`tabular-nums`).
+- Synthèse UX multi-plateforme sobre (`web-design-guidelines` + `ios-design-guidelines` + `android-design-guidelines` + `ipados-design-guidelines`) : listes groupées encadrées (*Inset Grouped*), indicateur pilule Material 3 sur barre mobile et rail tablette, puces de filtre à coche active, bouton flottant contextuel en zone du pouce mobile, feuilles modales avec poignée tactile et piège de focus WCAG 2.2, raccourcis clavier (`Alt+1..5`, `/`).
+- Icônes SVG Lucide en ligne (`stroke-width="2"`), conformité WCAG 2.5.3 (*Label in Name*) et lien d'évitement clavier (`.skip-link`).
 - Responsive vérifié par navigateur headless sur `320px`, `375px`, `390px`, `768px`, `1024px` et `1440px` (0 débordement horizontal, zones tactiles ≥ 44 px, `safe-area-inset-bottom`).
 
 ## 6. État vérifié des fonctionnalités
@@ -114,3 +115,7 @@ tests sur des systèmes réels, auto-inscription publique.
   - Réécriture de l'interface institutionnelle sobre (`client/index.html`, `client/css/app.css`, `client/js/app.js`, `client/js/i18n.js`).
   - Exécution réelle de `npm test` sur base temporaire isolée : **5 / 5 tests d'intégration HTTP réussis** (`tests/integration.test.js`) et **14 / 14 tests de sécurité réussis** (`tests/run_all_security_tests.js`).
   - Audit navigateur headless Chromium sur `320px`, `375px`, `390px`, `768px`, `1024px`, `1440px` : **0 débordement horizontal, 0 emoji, 0 dégradé, 0 erreur console**.
+- **29/10 (évolution UI/UX Design Skills)** — Application raisonnée de `web-design-guidelines`, `ios-design-guidelines`, `android-design-guidelines` et `ipados-design-guidelines` :
+  - Surfaces *Inset Grouped* iOS HIG, navigation 3 paliers (barre mobile M3 à pilule active `< 768px`, rail compact tablette `768–1099px`, barre latérale étendue `≥ 1100px`), *Filter Chips* M3 à coche, FAB mobile en zone du pouce, bulles asymétriques groupées par expéditeur, *Bottom Sheets* à poignée, piège/restauration de focus WCAG 2.2 et raccourcis clavier (`Alt+1..5`, `/`).
+  - Exclusion explicite des règles incompatibles avec la souveraineté FasoBrief (aucune police Google Fonts/CDN tiers, aucune couleur dynamique papier-peint remplacant le `#00705A`).
+  - Re-vérification complète du périmètre de sécurité : audit statique **0 URL externe / 0 emoji / 0 dégradé**, `npm test` **5/5 intégration + 14/14 sécurité**, et audit headless **6 largeurs sans débordement + E2EE Olm/Megolm validé**.

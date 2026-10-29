@@ -30,3 +30,8 @@ uploads/
 Thumbs.db
 .vscode/
 .idea/
+
+# Local AI agent skills metadata
+.agents/
+skills-lock.json
+

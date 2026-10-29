@@ -9,8 +9,11 @@
 </head>
 <body>
 
+  <!-- Lien d'évitement clavier (WCAG 2.2 AA — Règle 1.5) -->
+  <a href="#mainWorkspace" class="skip-link">Aller au contenu principal</a>
+
   <!-- ==================================================================== -->
-  <!-- 0. ÉCRAN D'OUVERTURE SOBRE                                           -->
+  <!-- 0. ÉCRAN D'INITIALISATION CRYPTOGRAPHIQUE INSTANTANÉ                 -->
   <!-- ==================================================================== -->
   <div id="splashScreen" class="splash-screen" role="status" aria-live="polite">
     <div class="splash-box">
@@ -55,7 +58,7 @@
 
         <!-- Onglet 1 : Connexion en 2 étapes (Mot de passe + TOTP) -->
         <div id="authPaneLogin" class="auth-body">
-          <div id="authLoginAlert" class="inline-alert error" hidden></div>
+          <div id="authLoginAlert" class="inline-alert error" role="alert" hidden></div>
 
           <!-- Étape 1 : Matricule & Mot de passe -->
           <form id="formLoginStep1" onsubmit="handleLoginStep1(event)">
@@ -94,7 +97,7 @@
 
         <!-- Onglet 2 : Activation d'un compte invité par code à usage unique -->
         <div id="authPaneActivate" class="auth-body" hidden>
-          <div id="authActivateAlert" class="inline-alert error" hidden></div>
+          <div id="authActivateAlert" class="inline-alert error" role="alert" hidden></div>
 
           <!-- Activation Étape 1 -->
           <form id="formActivateStep1" onsubmit="handleActivateStep1(event)">
@@ -187,15 +190,24 @@
           </svg>
         </div>
         <div class="header-titles">
-          <div class="header-title" data-i18n="app_title">FASOBRIEF</div>
+          <div class="header-title-row">
+            <div class="header-title" data-i18n="app_title">FASOBRIEF</div>
+            <span class="header-e2ee-pill" title="Chiffrement de bout en bout Matrix Olm et Megolm actif">
+              <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true" style="width:12px; height:12px;">
+                <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+              <span>E2EE Olm/Megolm</span>
+            </span>
+          </div>
           <div class="header-subtitle" id="headerContextSub" data-i18n="app_subtitle">Messagerie souveraine de l'administration</div>
         </div>
       </div>
 
       <div class="header-actions">
-        <button type="button" id="userMenuBtn" class="user-menu-trigger" aria-label="Menu du profil et options" aria-expanded="false" onclick="toggleUserDropdown(event)">
-          <span id="headerAvatar" class="avatar avatar-sm brand">AG</span>
-          <span id="headerUserLabel" class="user-trigger-label">Agent</span>
+        <button type="button" id="userMenuBtn" class="user-menu-trigger" aria-haspopup="menu" aria-expanded="false" onclick="toggleUserDropdown(event)">
+          <span id="headerAvatar" class="avatar avatar-sm brand" aria-hidden="true">AG</span>
+          <span id="headerUserLabel" class="user-trigger-label">Profil agent</span>
           <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
         </button>
 
@@ -221,14 +233,14 @@
 
           <div class="dropdown-divider"></div>
 
-          <button type="button" class="dropdown-item" onclick="toggleColorTheme()">
+          <button type="button" class="dropdown-item" role="menuitem" onclick="toggleColorTheme()">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
             </svg>
             <span data-i18n="btn_theme">Basculer le thème (Clair / Sombre)</span>
           </button>
 
-          <button type="button" class="dropdown-item danger" onclick="performLogout()">
+          <button type="button" class="dropdown-item danger" role="menuitem" onclick="performLogout()">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
               <polyline points="16 17 21 12 16 7"/>
@@ -236,6 +248,10 @@
             </svg>
             <span data-i18n="btn_logout">Déconnexion</span>
           </button>
+
+          <div class="dropdown-shortcuts-note">
+            Raccourcis clavier : <code>Alt+1..5</code> navigation • <code>/</code> recherche
+          </div>
         </div>
       </div>
     </header>
@@ -243,80 +259,105 @@
     <!-- Corps principal -->
     <div class="shell-body">
 
-      <!-- Rail de navigation latéral (Desktop >= 900px) -->
+      <!-- Rail de navigation adaptatif (Tablette 768-1099px compact / Desktop >= 1100px étendu) -->
       <nav class="desktop-rail" aria-label="Navigation principale">
-        <button type="button" id="railChat" class="rail-btn active" onclick="switchMainView('chat')">
+        <button type="button" id="railChat" class="rail-btn active" title="Discussions (Alt+1)" onclick="switchMainView('chat')">
           <span class="rail-btn-left">
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-            </svg>
-            <span data-i18n="nav_chat">Discussions</span>
+            <span class="nav-icon-pill" aria-hidden="true">
+              <svg class="icon" viewBox="0 0 24 24">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+              </svg>
+            </span>
+            <span class="rail-label" data-i18n="nav_chat">Discussions</span>
           </span>
-          <span id="badgeChatDesktop" class="nav-badge" hidden>0</span>
-        </button>
-
-        <button type="button" id="railDirectory" class="rail-btn" onclick="switchMainView('directory')">
-          <span class="rail-btn-left">
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
-              <circle cx="9" cy="7" r="4"/>
-              <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
-              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-            </svg>
-            <span data-i18n="nav_directory">Annuaire</span>
+          <span class="rail-right-meta">
+            <span id="badgeChatDesktop" class="nav-badge" hidden>0</span>
+            <kbd class="rail-kbd" aria-hidden="true">Alt+1</kbd>
           </span>
         </button>
 
-        <button type="button" id="railInstructions" class="rail-btn" onclick="switchMainView('instructions')">
+        <button type="button" id="railDirectory" class="rail-btn" title="Annuaire (Alt+2)" onclick="switchMainView('directory')">
           <span class="rail-btn-left">
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-              <rect width="8" height="4" x="8" y="2" rx="1" ry="1"/>
-              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
-              <path d="M12 11h4"/>
-              <path d="M12 16h4"/>
-              <path d="M8 11h.01"/>
-              <path d="M8 16h.01"/>
-            </svg>
-            <span data-i18n="nav_instructions">Instructions</span>
+            <span class="nav-icon-pill" aria-hidden="true">
+              <svg class="icon" viewBox="0 0 24 24">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+            </span>
+            <span class="rail-label" data-i18n="nav_directory">Annuaire</span>
           </span>
-          <span id="badgeInstDesktop" class="nav-badge" hidden>0</span>
+          <span class="rail-right-meta">
+            <kbd class="rail-kbd" aria-hidden="true">Alt+2</kbd>
+          </span>
         </button>
 
-        <button type="button" id="railNotifications" class="rail-btn" onclick="switchMainView('notifications')">
+        <button type="button" id="railInstructions" class="rail-btn" title="Instructions (Alt+3)" onclick="switchMainView('instructions')">
           <span class="rail-btn-left">
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
-              <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
-            </svg>
-            <span data-i18n="nav_notifications">Alertes</span>
+            <span class="nav-icon-pill" aria-hidden="true">
+              <svg class="icon" viewBox="0 0 24 24">
+                <rect width="8" height="4" x="8" y="2" rx="1" ry="1"/>
+                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                <path d="M12 11h4"/>
+                <path d="M12 16h4"/>
+                <path d="M8 11h.01"/>
+                <path d="M8 16h.01"/>
+              </svg>
+            </span>
+            <span class="rail-label" data-i18n="nav_instructions">Instructions</span>
           </span>
-          <span id="badgeNotifDesktop" class="nav-badge" hidden>0</span>
+          <span class="rail-right-meta">
+            <span id="badgeInstDesktop" class="nav-badge" hidden>0</span>
+            <kbd class="rail-kbd" aria-hidden="true">Alt+3</kbd>
+          </span>
         </button>
 
-        <button type="button" id="railAdmin" class="rail-btn" onclick="switchMainView('admin')" hidden>
+        <button type="button" id="railNotifications" class="rail-btn" title="Alertes (Alt+4)" onclick="switchMainView('notifications')">
           <span class="rail-btn-left">
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-            </svg>
-            <span data-i18n="nav_admin">Administration</span>
+            <span class="nav-icon-pill" aria-hidden="true">
+              <svg class="icon" viewBox="0 0 24 24">
+                <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
+                <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
+              </svg>
+            </span>
+            <span class="rail-label" data-i18n="nav_notifications">Alertes</span>
+          </span>
+          <span class="rail-right-meta">
+            <span id="badgeNotifDesktop" class="nav-badge" hidden>0</span>
+            <kbd class="rail-kbd" aria-hidden="true">Alt+4</kbd>
+          </span>
+        </button>
+
+        <button type="button" id="railAdmin" class="rail-btn" title="Administration (Alt+5)" onclick="switchMainView('admin')" hidden>
+          <span class="rail-btn-left">
+            <span class="nav-icon-pill" aria-hidden="true">
+              <svg class="icon" viewBox="0 0 24 24">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              </svg>
+            </span>
+            <span class="rail-label" data-i18n="nav_admin">Administration</span>
+          </span>
+          <span class="rail-right-meta">
+            <kbd class="rail-kbd" aria-hidden="true">Alt+5</kbd>
           </span>
         </button>
       </nav>
 
-      <!-- Zone d'affichage des vues -->
-      <div class="workspace-area">
+      <!-- Zone d'affichage principale -->
+      <main id="mainWorkspace" class="workspace-area" tabindex="-1">
 
         <!-- ================================================================ -->
         <!-- VUE 1 : DISCUSSIONS (1:1 & GROUPES CHIFFRÉS OLM/MEGOLM)          -->
         <!-- ================================================================ -->
         <section id="viewChat" class="chat-layout" aria-label="Messagerie chiffrée">
           <!-- Colonne des conversations -->
-          <aside class="conversations-pane">
+          <aside class="conversations-pane" aria-label="Liste des discussions">
             <div class="pane-toolbar">
               <div class="pane-toolbar-top">
                 <h2 class="pane-title" data-i18n="nav_chat">Discussions</h2>
                 <div class="pane-toolbar-actions">
-                  <button type="button" class="btn btn-secondary btn-sm" onclick="switchMainView('directory')" aria-label="Ouvrir une discussion depuis l'annuaire">
+                  <button type="button" class="btn btn-secondary btn-sm" title="Ouvrir une discussion directe depuis l'annuaire" onclick="switchMainView('directory')">
                     <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
                       <circle cx="9" cy="7" r="4"/>
@@ -334,7 +375,13 @@
                   </button>
                 </div>
               </div>
-              <input type="search" id="convSearchInput" class="form-input" style="min-height: 38px;" placeholder="Rechercher une conversation..." oninput="renderConversationsList()">
+              <div class="search-field-wrap">
+                <svg class="icon icon-sm search-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="11" cy="11" r="8"/>
+                  <path d="m21 21-4.3-4.3"/>
+                </svg>
+                <input type="search" id="convSearchInput" class="form-input" aria-label="Rechercher une conversation" placeholder="Rechercher une conversation (/)..." oninput="renderConversationsList()">
+              </div>
             </div>
 
             <div id="conversationsList" class="conv-list" role="list"></div>
@@ -364,7 +411,7 @@
                 </div>
 
                 <div class="chat-topbar-actions">
-                  <button type="button" id="btnChatCreateInst" class="btn btn-secondary btn-sm" onclick="openInstructionModalFromChat()" aria-label="Créer une instruction dans cette conversation" hidden>
+                  <button type="button" id="btnChatCreateInst" class="btn btn-secondary btn-sm" title="Créer une instruction officielle dans ce canal" onclick="openInstructionModalFromChat()" hidden>
                     <svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true">
                       <rect width="8" height="4" x="8" y="2" rx="1" ry="1"/>
                       <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
@@ -390,8 +437,8 @@
                     <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
                   </svg>
                 </button>
-                <textarea id="chatComposerInput" class="composer-input" rows="1" data-i18n="placeholder_message" placeholder="Écrire un message officiel chiffré..." onkeydown="handleComposerKeydown(event)"></textarea>
-                <button type="button" class="btn btn-primary" style="padding: 0 14px;" aria-label="Envoyer le message chiffré" onclick="submitChatMessage()">
+                <textarea id="chatComposerInput" class="composer-input" rows="1" aria-label="Message officiel chiffré" data-i18n="placeholder_message" placeholder="Écrire un message officiel chiffré..." onkeydown="handleComposerKeydown(event)"></textarea>
+                <button type="button" class="composer-send-btn" aria-label="Envoyer le message chiffré" onclick="submitChatMessage()">
                   <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
                     <line x1="22" y1="2" x2="11" y2="13"/>
                     <polygon points="22 2 15 22 11 13 2 9 22 2"/>
@@ -421,26 +468,35 @@
               </button>
             </div>
 
-            <div class="filter-bar">
-              <input type="search" id="dirSearchInput" class="form-input" placeholder="Nom, matricule ou fonction..." oninput="loadDirectoryView()">
-              <select id="dirOrgSelect" class="form-select" aria-label="Filtrer par organisation" onchange="onDirectoryOrgChange()">
-                <option value="">Toutes les organisations</option>
-              </select>
-              <select id="dirDirectionSelect" class="form-select" aria-label="Filtrer par direction" onchange="onDirectoryDirectionChange()">
-                <option value="">Toutes les directions</option>
-              </select>
-              <select id="dirServiceSelect" class="form-select" aria-label="Filtrer par service" onchange="loadDirectoryView()">
-                <option value="">Tous les services</option>
-              </select>
+            <div class="filter-card">
+              <div class="filter-bar">
+                <div class="search-field-wrap">
+                  <svg class="icon icon-sm search-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="11" cy="11" r="8"/>
+                    <path d="m21 21-4.3-4.3"/>
+                  </svg>
+                  <input type="search" id="dirSearchInput" class="form-input" aria-label="Rechercher un agent" placeholder="Nom, matricule ou fonction (/)..." oninput="loadDirectoryView()">
+                </div>
+                <select id="dirOrgSelect" class="form-select" aria-label="Filtrer par organisation" onchange="onDirectoryOrgChange()">
+                  <option value="">Toutes les organisations</option>
+                </select>
+                <select id="dirDirectionSelect" class="form-select" aria-label="Filtrer par direction" onchange="onDirectoryDirectionChange()">
+                  <option value="">Toutes les directions</option>
+                </select>
+                <select id="dirServiceSelect" class="form-select" aria-label="Filtrer par service" onchange="loadDirectoryView()">
+                  <option value="">Tous les services</option>
+                </select>
+              </div>
+
+              <div id="dirIncludeAllWrap" style="margin-top: 10px;" hidden>
+                <label style="display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-xs); color: var(--text-secondary); cursor: pointer;">
+                  <input type="checkbox" id="dirIncludeAllCheck" onchange="loadDirectoryView()" style="width: 16px; height: 16px; accent-color: var(--brand);">
+                  <span>Afficher également les comptes invités, suspendus ou révoqués</span>
+                </label>
+              </div>
             </div>
 
-            <div id="dirIncludeAllWrap" style="margin-bottom: 12px;" hidden>
-              <label style="display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-xs); color: var(--text-secondary); cursor: pointer;">
-                <input type="checkbox" id="dirIncludeAllCheck" onchange="loadDirectoryView()" style="width: 16px; height: 16px; accent-color: var(--brand);">
-                <span>Afficher également les comptes invités, suspendus ou révoqués</span>
-              </label>
-            </div>
-
+            <div class="section-eyebrow">Agents et unités administratives</div>
             <div id="directoryList" class="compact-list"></div>
           </div>
         </section>
@@ -483,15 +539,35 @@
               </div>
             </div>
 
-            <div class="segmented-tabs" role="tablist" aria-label="Filtres des instructions">
-              <button type="button" class="seg-btn active" data-inst-filter="ALL" onclick="setInstructionFilter('ALL')">Toutes</button>
-              <button type="button" class="seg-btn" data-inst-filter="TO_ACT" onclick="setInstructionFilter('TO_ACT')">À traiter</button>
-              <button type="button" class="seg-btn" data-inst-filter="ISSUED" onclick="setInstructionFilter('ISSUED')">Émises par moi</button>
-              <button type="button" class="seg-btn" data-inst-filter="OVERDUE" onclick="setInstructionFilter('OVERDUE')">En retard</button>
-              <button type="button" class="seg-btn" id="btnFilterDrafts" data-inst-filter="DRAFTS" onclick="setInstructionFilter('DRAFTS')" hidden>Brouillons</button>
-              <button type="button" class="seg-btn" data-inst-filter="CLOSED" onclick="setInstructionFilter('CLOSED')">Clôturées / Annulées</button>
+            <!-- Puces de filtre Material Design 3 à coche active -->
+            <div class="filter-chips-bar" role="tablist" aria-label="Filtres des instructions">
+              <button type="button" class="filter-chip active" role="tab" aria-selected="true" data-inst-filter="ALL" onclick="setInstructionFilter('ALL')">
+                <svg class="icon chip-check" viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Toutes</span>
+              </button>
+              <button type="button" class="filter-chip" role="tab" aria-selected="false" data-inst-filter="TO_ACT" onclick="setInstructionFilter('TO_ACT')">
+                <svg class="icon chip-check" viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>À traiter</span>
+              </button>
+              <button type="button" class="filter-chip" role="tab" aria-selected="false" data-inst-filter="ISSUED" onclick="setInstructionFilter('ISSUED')">
+                <svg class="icon chip-check" viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Émises par moi</span>
+              </button>
+              <button type="button" class="filter-chip" role="tab" aria-selected="false" data-inst-filter="OVERDUE" onclick="setInstructionFilter('OVERDUE')">
+                <svg class="icon chip-check" viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>En retard</span>
+              </button>
+              <button type="button" class="filter-chip" role="tab" aria-selected="false" id="btnFilterDrafts" data-inst-filter="DRAFTS" onclick="setInstructionFilter('DRAFTS')" hidden>
+                <svg class="icon chip-check" viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Brouillons</span>
+              </button>
+              <button type="button" class="filter-chip" role="tab" aria-selected="false" data-inst-filter="CLOSED" onclick="setInstructionFilter('CLOSED')">
+                <svg class="icon chip-check" viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Clôturées / Annulées</span>
+              </button>
             </div>
 
+            <div class="section-eyebrow">Registre des instructions chiffrées</div>
             <div id="instructionsList" class="compact-list"></div>
           </div>
         </section>
@@ -514,9 +590,9 @@
               </button>
             </div>
 
-            <div class="inline-alert" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; background-color: var(--bg-subtle);">
+            <div class="inline-alert" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
               <div>
-                <strong style="font-weight: var(--fw-semibold);">Notifications système du navigateur (opt-in)</strong>
+                <strong>Notifications système du navigateur (opt-in)</strong>
                 <div class="form-hint" style="margin-top: 2px;">
                   Affiche une alerte générique locale uniquement lorsque l'application est ouverte (aucun service Web Push tiers).
                 </div>
@@ -527,6 +603,7 @@
               </label>
             </div>
 
+            <div class="section-eyebrow">Flux chronologique des alertes</div>
             <div id="notificationsList" class="compact-list"></div>
           </div>
         </section>
@@ -552,17 +629,26 @@
               </button>
             </div>
 
-            <!-- Sous-onglets Administration -->
-            <div class="segmented-tabs" role="tablist">
-              <button type="button" class="seg-btn active" data-admin-tab="users" onclick="switchAdminSubTab('users')">Comptes et révocation</button>
-              <button type="button" class="seg-btn" data-admin-tab="audit" onclick="switchAdminSubTab('audit')">Journal d'audit</button>
-              <button type="button" class="seg-btn" data-admin-tab="proofs" onclick="switchAdminSubTab('proofs')">Vérification serveur (Jury)</button>
+            <!-- Puces de navigation Administration -->
+            <div class="filter-chips-bar" role="tablist" aria-label="Sections d'administration">
+              <button type="button" class="filter-chip active" role="tab" aria-selected="true" data-admin-tab="users" onclick="switchAdminSubTab('users')">
+                <svg class="icon chip-check" viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Comptes et révocation</span>
+              </button>
+              <button type="button" class="filter-chip" role="tab" aria-selected="false" data-admin-tab="audit" onclick="switchAdminSubTab('audit')">
+                <svg class="icon chip-check" viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Journal d'audit</span>
+              </button>
+              <button type="button" class="filter-chip" role="tab" aria-selected="false" data-admin-tab="proofs" onclick="switchAdminSubTab('proofs')">
+                <svg class="icon chip-check" viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Vérification serveur (Jury)</span>
+              </button>
             </div>
 
             <!-- Panneau code d'activation affiché une seule fois après création -->
             <div id="oneTimeInviteResult" class="inline-alert warning" hidden>
               <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px;">
-                <strong style="font-weight: var(--fw-semibold);">Code d'activation à usage unique généré (valable 72 h)</strong>
+                <strong>Code d'activation à usage unique généré (valable 72 h)</strong>
                 <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('oneTimeInviteResult').hidden = true">Fermer</button>
               </div>
               <p style="margin-bottom: 8px;">
@@ -576,33 +662,38 @@
 
             <!-- Sous-vue 5A : Comptes -->
             <div id="adminSubUsers">
+              <div class="section-eyebrow">Comptes d'agents et sessions actives</div>
               <div id="adminUsersList" class="compact-list"></div>
             </div>
 
             <!-- Sous-vue 5B : Journal d'audit -->
             <div id="adminSubAudit" hidden>
-              <div class="filter-bar">
-                <select id="auditFilterSelect" class="form-select" aria-label="Filtrer par type d'événement" onchange="loadAuditLogsView()">
-                  <option value="">Tous les événements de sécurité</option>
-                  <option value="INTRUSION_ATTEMPT">INTRUSION_ATTEMPT (Intrus rejeté)</option>
-                  <option value="AUTH_SUCCESS_SESSION_CREATED">AUTH_SUCCESS_SESSION_CREATED</option>
-                  <option value="AUTH_FAIL_2FA">AUTH_FAIL_2FA</option>
-                  <option value="ACCOUNT_INVITED">ACCOUNT_INVITED</option>
-                  <option value="ACCOUNT_ACTIVATED">ACCOUNT_ACTIVATED</option>
-                  <option value="AGENT_SUSPENDED">AGENT_SUSPENDED</option>
-                  <option value="AGENT_REACTIVATED">AGENT_REACTIVATED</option>
-                  <option value="AGENT_REVOKED">AGENT_REVOKED</option>
-                  <option value="INSTRUCTION_CREATED">INSTRUCTION_CREATED</option>
-                  <option value="INSTRUCTION_VERSIONED">INSTRUCTION_VERSIONED</option>
-                  <option value="UNAUTHORIZED_FILE_ACCESS">UNAUTHORIZED_FILE_ACCESS</option>
-                </select>
-                <button type="button" class="btn btn-secondary btn-sm" onclick="loadAuditLogsView()">Actualiser</button>
+              <div class="filter-card">
+                <div class="filter-bar">
+                  <select id="auditFilterSelect" class="form-select" aria-label="Filtrer par type d'événement" onchange="loadAuditLogsView()">
+                    <option value="">Tous les événements de sécurité</option>
+                    <option value="INTRUSION_ATTEMPT">INTRUSION_ATTEMPT (Intrus rejeté)</option>
+                    <option value="AUTH_SUCCESS_SESSION_CREATED">AUTH_SUCCESS_SESSION_CREATED</option>
+                    <option value="AUTH_FAIL_2FA">AUTH_FAIL_2FA</option>
+                    <option value="ACCOUNT_INVITED">ACCOUNT_INVITED</option>
+                    <option value="ACCOUNT_ACTIVATED">ACCOUNT_ACTIVATED</option>
+                    <option value="AGENT_SUSPENDED">AGENT_SUSPENDED</option>
+                    <option value="AGENT_REACTIVATED">AGENT_REACTIVATED</option>
+                    <option value="AGENT_REVOKED">AGENT_REVOKED</option>
+                    <option value="INSTRUCTION_CREATED">INSTRUCTION_CREATED</option>
+                    <option value="INSTRUCTION_VERSIONED">INSTRUCTION_VERSIONED</option>
+                    <option value="UNAUTHORIZED_FILE_ACCESS">UNAUTHORIZED_FILE_ACCESS</option>
+                  </select>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="loadAuditLogsView()">Actualiser</button>
+                </div>
               </div>
+              <div class="section-eyebrow">Événements immuables</div>
               <div id="auditLogsList" class="compact-list"></div>
             </div>
 
             <!-- Sous-vue 5C : Preuves techniques pour le jury -->
             <div id="adminSubProofs" hidden>
+              <div class="section-eyebrow"> Contrôles contradictoires de sécurité</div>
               <div class="compact-list">
                 <div class="list-row">
                   <div class="list-row-main">
@@ -629,51 +720,70 @@
           </div>
         </section>
 
-      </div>
+        <!-- Bouton flottant contextuel dans la zone du pouce sur Mobile (M3 Extended FAB) -->
+        <button type="button" id="mobileContextFab" class="mobile-fab" onclick="triggerMobileContextFab()" hidden>
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <line x1="12" y1="5" x2="12" y2="19"/>
+            <line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          <span id="mobileContextFabLabel">Nouveau</span>
+        </button>
+
+      </main>
     </div>
 
-    <!-- Barre de navigation inférieure Mobile (< 900px) -->
+    <!-- Barre de navigation inférieure Mobile (< 768px) — Material 3 NavigationBar -->
     <nav class="mobile-nav" aria-label="Navigation principale mobile">
       <button type="button" id="mobChat" class="mobile-nav-btn active" onclick="switchMainView('chat')">
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-        </svg>
+        <span class="nav-icon-pill" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+        </span>
         <span data-i18n="nav_chat">Discussions</span>
         <span id="badgeChatMobile" class="nav-badge" hidden>0</span>
       </button>
 
       <button type="button" id="mobDirectory" class="mobile-nav-btn" onclick="switchMainView('directory')">
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
-          <circle cx="9" cy="7" r="4"/>
-          <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
-          <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-        </svg>
+        <span class="nav-icon-pill" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+        </span>
         <span data-i18n="nav_directory">Annuaire</span>
       </button>
 
       <button type="button" id="mobInstructions" class="mobile-nav-btn" onclick="switchMainView('instructions')">
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-          <rect width="8" height="4" x="8" y="2" rx="1" ry="1"/>
-          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
-        </svg>
+        <span class="nav-icon-pill" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24">
+            <rect width="8" height="4" x="8" y="2" rx="1" ry="1"/>
+            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+          </svg>
+        </span>
         <span data-i18n="nav_instructions">Instructions</span>
         <span id="badgeInstMobile" class="nav-badge" hidden>0</span>
       </button>
 
       <button type="button" id="mobNotifications" class="mobile-nav-btn" onclick="switchMainView('notifications')">
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
-          <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
-        </svg>
+        <span class="nav-icon-pill" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
+            <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
+          </svg>
+        </span>
         <span data-i18n="nav_notifications">Alertes</span>
         <span id="badgeNotifMobile" class="nav-badge" hidden>0</span>
       </button>
 
       <button type="button" id="mobAdmin" class="mobile-nav-btn" onclick="switchMainView('admin')" hidden>
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-        </svg>
+        <span class="nav-icon-pill" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
+        </span>
         <span data-i18n="nav_admin">Admin</span>
       </button>
     </nav>
@@ -681,12 +791,13 @@
   </div>
 
   <!-- ==================================================================== -->
-  <!-- 3. MODALES RÉUTILISABLES & MÉTIER                                    -->
+  <!-- 3. MODALES & FEUILLES MOBILES ACCESSIBLES                            -->
   <!-- ==================================================================== -->
 
   <!-- Modale : Créer / Modifier une Instruction Administrative -->
   <div id="modalInstructionForm" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalInstFormTitle" hidden>
     <div class="modal-card">
+      <div class="sheet-grabber" aria-hidden="true"></div>
       <div class="modal-header">
         <h2 id="modalInstFormTitle" class="modal-title">Nouvelle instruction administrative</h2>
         <button type="button" class="btn-icon" aria-label="Fermer la fenêtre" onclick="closeModal('modalInstructionForm')">
@@ -714,7 +825,7 @@
             <textarea id="instBodyInput" class="form-textarea" placeholder="Précisez le périmètre, les livrables attendus et les modalités de compte rendu..."></textarea>
           </div>
 
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+          <div class="form-grid-2">
             <div class="form-group">
               <label class="form-label" for="instPrioritySelect">Priorité</label>
               <select id="instPrioritySelect" class="form-select">
@@ -750,6 +861,7 @@
   <!-- Modale : Détail, Suivi & Historique d'une Instruction -->
   <div id="modalInstructionDetail" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalInstDetailTitle" hidden>
     <div class="modal-card wide">
+      <div class="sheet-grabber" aria-hidden="true"></div>
       <div class="modal-header">
         <h2 id="modalInstDetailTitle" class="modal-title">Détail de l'instruction</h2>
         <button type="button" class="btn-icon" aria-label="Fermer le détail" onclick="closeModal('modalInstructionDetail')">
@@ -764,6 +876,7 @@
   <!-- Modale : Infos du Message (Statuts par destinataire) -->
   <div id="modalMessageInfo" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalMsgInfoTitle" hidden>
     <div class="modal-card">
+      <div class="sheet-grabber" aria-hidden="true"></div>
       <div class="modal-header">
         <h2 id="modalMsgInfoTitle" class="modal-title">Informations du message</h2>
         <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalMessageInfo')">
@@ -777,6 +890,7 @@
   <!-- Modale : Infos de la Conversation & Gestion des Membres -->
   <div id="modalConversationInfo" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalConvInfoTitle" hidden>
     <div class="modal-card wide">
+      <div class="sheet-grabber" aria-hidden="true"></div>
       <div class="modal-header">
         <h2 id="modalConvInfoTitle" class="modal-title">Paramètres et membres</h2>
         <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalConversationInfo')">
@@ -790,6 +904,7 @@
   <!-- Modale : Création d'un Groupe de Travail -->
   <div id="modalCreateGroup" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalCreateGroupTitle" hidden>
     <div class="modal-card">
+      <div class="sheet-grabber" aria-hidden="true"></div>
       <div class="modal-header">
         <h2 id="modalCreateGroupTitle" class="modal-title">Créer un groupe de service</h2>
         <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalCreateGroup')">
@@ -826,6 +941,7 @@
   <!-- Modale : Invitation d'un Nouvel Agent (ADMIN uniquement) -->
   <div id="modalInviteAgent" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalInviteTitle" hidden>
     <div class="modal-card">
+      <div class="sheet-grabber" aria-hidden="true"></div>
       <div class="modal-header">
         <h2 id="modalInviteTitle" class="modal-title">Enrôler et inviter un agent</h2>
         <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalInviteAgent')">
@@ -846,7 +962,7 @@
             <label class="form-label" for="invJobTitle">Fonction / Poste</label>
             <input type="text" id="invJobTitle" class="form-input" placeholder="ex. Chargée d'études numériques">
           </div>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+          <div class="form-grid-2">
             <div class="form-group">
               <label class="form-label" for="invRole">Rôle habilité</label>
               <select id="invRole" class="form-select" required>
@@ -873,6 +989,7 @@
   <!-- Modale : Confirmation d'action sensible (Suspension / Révocation / Déclaration d'exécution) -->
   <div id="modalActionConfirm" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalActionTitle" hidden>
     <div class="modal-card">
+      <div class="sheet-grabber" aria-hidden="true"></div>
       <div class="modal-header">
         <h2 id="modalActionTitle" class="modal-title">Confirmation</h2>
         <button type="button" class="btn-icon" aria-label="Fermer" onclick="closeModal('modalActionConfirm')">
