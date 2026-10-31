@@ -28,4 +28,4 @@
 | **17** | Innovation : Instructions structurées | Brouillon, publication, `viewed` ≠ `ack` signé Ed25519, versions, exécution | `server/routes/instructions-routes.js`, `client/js/app.js` | Tests 08-09 + Intégration #4 | **Validé** |
 | **18** | UX Mobile-First sobre & responsive | Charte blanc/`#00705A`, zéro emoji/dégradé, `320px`–`1440px` sans débordement | `client/css/app.css`, `client/index.html` | Audit Chromium headless 6 tailles | **Validé** |
 | **19** | Bonus Langues nationales (+3 pts) | Français, Mooré et Dioula disponibles hors ligne | `client/js/i18n.js` | Bascule UI vérifiée | **Validé** |
-| **20** | Bonus Tests automatisés (+2 pts) | 19 tests automatisés reproductibles via `npm test` | `tests/` | `npm test` (code retour 0) | **Validé** |
+| **20** | Bonus Tests automatisés (+2 pts) | 21 tests automatisés reproductibles via `npm test` | `tests/` | `npm test` (code retour 0) | **Validé** |

@@ -55,8 +55,8 @@ router.get('/directory', requireAuth, (req, res) => {
   }
 
   const sql = `
-    SELECT u.id, u.matricule, u.full_name AS fullName, u.role,
-           u.job_title AS jobTitle, u.service_id AS serviceId, u.service_ministry AS serviceMinistry,
+    SELECT u.id, u.username, u.matricule, u.full_name AS fullName, u.role,
+           u.job_title AS jobTitle, u.avatar_data AS avatarData, u.service_id AS serviceId, u.service_ministry AS serviceMinistry,
            ${canSeeStatuses ? `u.status, u.revocation_reason AS statusReason,` : `'ACTIVE' AS status,`}
            s.name AS serviceName, d.id AS directionId, d.name AS directionName,
            o.id AS orgId, o.code AS orgCode, o.name AS orgName
@@ -79,3 +79,4 @@ router.get('/directory', requireAuth, (req, res) => {
 });
 
 module.exports = router;
+

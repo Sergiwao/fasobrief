@@ -197,6 +197,54 @@ function hydrateInstructionForUser(inst, currentUserId) {
 }
 
 /**
+ * Prépare ou récupère un périmètre cryptographique Megolm dédié aux destinataires exacts d'une instruction
+ */
+router.post('/instructions/scope-group', requireAuth, requireRole('ADMIN', 'DIRECTEUR', 'CHEF_SERVICE'), (req, res) => {
+  const { recipientIds } = req.body || {};
+  if (!Array.isArray(recipientIds) || recipientIds.length === 0) {
+    return res.status(400).json({ error: 'DESTINATAIRES_REQUIS' });
+  }
+
+  const validRecipientIds = [];
+  const seen = new Set([req.user.id]);
+  for (const uid of recipientIds) {
+    if (!uid || seen.has(uid)) continue;
+    const valid = db.prepare(`
+      SELECT id FROM users WHERE id = ? AND status = 'ACTIVE' AND is_revoked = 0 AND is_enrolled = 1
+    `).get(uid);
+    if (valid) {
+      seen.add(uid);
+      validRecipientIds.push(uid);
+    }
+  }
+
+  if (validRecipientIds.length === 0) {
+    return res.status(400).json({ error: 'AUCUN_DESTINATAIRE_ACTIF_VALIDE' });
+  }
+
+  const allParticipants = [req.user.id, ...validRecipientIds].sort();
+  const scopeKey = 'inst_scope:' + crypto.createHash('sha256').update(allParticipants.join(':')).digest('hex').slice(0, 32);
+
+  let grp = db.prepare(`SELECT * FROM groups WHERE scope_key = ? AND is_active = 1`).get(scopeKey);
+  if (!grp) {
+    const groupId = 'grp_iscope_' + crypto.randomUUID();
+    db.prepare(`
+      INSERT INTO groups (id, type, channel_kind, scope_key, name, description, service_ministry, created_by, is_active)
+      VALUES (?, 'GROUP', 'instruction_scope', ?, 'Diffusion Instruction E2EE', 'Périmètre Megolm restreint aux destinataires désignés', 'Instructions', ?, 1)
+    `).run(groupId, scopeKey, req.user.id);
+    grp = db.prepare(`SELECT * FROM groups WHERE id = ?`).get(groupId);
+  }
+
+  const insMem = db.prepare(`INSERT OR IGNORE INTO group_members (group_id, user_id, member_role) VALUES (?, ?, ?)`);
+  insMem.run(grp.id, req.user.id, 'OWNER');
+  for (const uid of validRecipientIds) {
+    insMem.run(grp.id, uid, 'MEMBER');
+  }
+
+  res.json({ success: true, groupId: grp.id, recipientIds: validRecipientIds });
+});
+
+/**
  * Création d'une instruction (BROUILLON ou PUBLIEE) par ADMIN, DIRECTEUR ou CHEF_SERVICE
  */
 router.post('/instructions', requireAuth, requireRole('ADMIN', 'DIRECTEUR', 'CHEF_SERVICE'), (req, res) => {
@@ -853,3 +901,4 @@ router.get('/instructions/:instructionId', requireAuth, (req, res) => {
 });
 
 module.exports = router;
+

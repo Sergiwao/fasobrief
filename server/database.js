@@ -26,7 +26,7 @@ db.exec(`PRAGMA journal_mode = WAL;`);
 db.exec(`PRAGMA foreign_keys = ON;`);
 db.exec(`PRAGMA busy_timeout = 5000;`);
 
-const TARGET_SCHEMA_VERSION = 2;
+const TARGET_SCHEMA_VERSION = 4;
 
 function hasColumn(tableName, columnName) {
   const cols = db.prepare(`PRAGMA table_info(${tableName})`).all();
@@ -78,6 +78,7 @@ function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       matricule TEXT UNIQUE NOT NULL,
+      username TEXT,
       full_name TEXT NOT NULL,
       service_id TEXT,
       service_ministry TEXT NOT NULL,
@@ -95,6 +96,7 @@ function initializeDatabase() {
       revoked_at DATETIME,
       notif_browser_enabled INTEGER DEFAULT 0,
       notif_muted_groups TEXT DEFAULT '[]',
+      avatar_data TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE SET NULL
     );
@@ -188,6 +190,8 @@ function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS groups (
       id TEXT PRIMARY KEY,
       type TEXT NOT NULL DEFAULT 'GROUP' CHECK(type IN ('DIRECT', 'GROUP')),
+      channel_kind TEXT NOT NULL DEFAULT 'group',
+      scope_key TEXT,
       direct_pair_key TEXT UNIQUE,
       name TEXT NOT NULL,
       description TEXT DEFAULT '',
@@ -366,6 +370,7 @@ function initializeDatabase() {
 
   if (currentVersion < TARGET_SCHEMA_VERSION) {
     // Migration colonnes users
+    addColumnIfMissing('users', 'username', 'TEXT');
     addColumnIfMissing('users', 'service_id', 'TEXT');
     addColumnIfMissing('users', 'job_title', "TEXT DEFAULT ''");
     addColumnIfMissing('users', 'status', "TEXT NOT NULL DEFAULT 'ACTIVE'");
@@ -387,11 +392,14 @@ function initializeDatabase() {
 
     // Migration colonnes groups & group_members
     addColumnIfMissing('groups', 'type', "TEXT NOT NULL DEFAULT 'GROUP'");
+    addColumnIfMissing('groups', 'channel_kind', "TEXT NOT NULL DEFAULT 'group'");
+    addColumnIfMissing('groups', 'scope_key', 'TEXT');
     addColumnIfMissing('groups', 'direct_pair_key', 'TEXT');
     addColumnIfMissing('groups', 'description', "TEXT DEFAULT ''");
     addColumnIfMissing('groups', 'service_id', 'TEXT');
     addColumnIfMissing('groups', 'key_epoch', 'INTEGER NOT NULL DEFAULT 1');
     addColumnIfMissing('group_members', 'member_role', "TEXT NOT NULL DEFAULT 'MEMBER'");
+    addColumnIfMissing('users', 'avatar_data', 'TEXT');
 
     // Migration colonnes messages
     addColumnIfMissing('messages', 'sender_device_id', 'TEXT');
@@ -414,6 +422,8 @@ function initializeDatabase() {
     addColumnIfMissing('audit_logs', 'target_id', 'TEXT');
 
     db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users(LOWER(username)) WHERE username IS NOT NULL AND username != '';
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_scope_key ON groups(scope_key) WHERE scope_key IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_messages_group_created ON messages(group_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_to_device_recipient ON to_device_messages(recipient_user_id, recipient_device_id);
       CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications(user_id, is_read, updated_at DESC);

@@ -49,7 +49,15 @@ app.use(express.urlencoded({ extended: true }));
 // Fichiers statiques du client et binaire WebAssembly @matrix-org/olm local (zéro CDN externe)
 const CLIENT_DIR = path.join(__dirname, '..', 'client');
 const OLM_DIR = path.join(__dirname, '..', 'node_modules', '@matrix-org', 'olm');
-app.use(express.static(CLIENT_DIR));
+app.use(express.static(CLIENT_DIR, {
+  etag: false,
+  maxAge: 0,
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html') || filePath.endsWith('.js') || filePath.endsWith('.css')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    }
+  }
+}));
 app.use('/vendor/olm', express.static(OLM_DIR));
 
 // Sonde de santé conteneur

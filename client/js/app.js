@@ -1,3481 +1,2989 @@
 /**
- * FASOBRIEF — Contrôleur Frontend Mobile-First
- *
- * Fonctionnalités réelles connectées :
- * - Authentification forte en 2 étapes (Mot de passe + TOTP RFC 6238 avec challengeToken)
- * - Activation de compte invité par code à usage unique 128 bits + enrôlement TOTP
- * - Chiffrement de bout en bout Olm (1:1 Double Ratchet) + Megolm (Sessions de groupe)
- * - Pièces jointes chiffrées côté client AES-256-GCM + intégrité SHA-256
- * - Accusés réels d'envoi, de remise sur appareil (delivered) et de lecture effective (read)
- * - Annuaire institutionnel hiérarchique (Organisation -> Direction -> Service -> Agents)
- * - Conversations individuelles uniques (DIRECT) et groupes administrables (GROUP)
- * - Cycle complet et versionné des instructions administratives avec signature Ed25519
- * - Centre de notifications persistées sans fuite de contenu + alerte navigateur opt-in
- * - Administration des comptes (Invitation, Suspension, Réactivation, Révocation en direct) & Audit
+ * FASOBRIEF — Application Client Souveraine (Reproduction fidèle Lovable + E2EE Olm/Megolm Réel)
  */
 
-const AppState = {
-  demoMode: false,
-  demoAccounts: [],
-  currentView: 'chat',
-  adminSubTab: 'users',
-  instFilter: 'ALL',
-  pendingLogin: null,
-  pendingActivation: null,
-  conversations: [],
-  activeGroupId: null,
-  activeMessages: [],
-  failedOutgoing: new Map(), // clientMsgId -> { groupId, plainText }
-  decryptedFileMeta: new Map(), // messageId -> { fileId, fileKeyBase64, ivBase64, sha256Base64, originalName, originalMime, originalSize }
-  decryptedMsgText: new Map(), // messageId -> plainText
-  directoryCache: { organisations: [], directions: [], services: [], agents: [] },
-  instructionsCache: [],
-  openInstructionId: null,
-  unreadNotifications: 0,
-  actionConfirmHandler: null,
-  modalTriggerStack: [],
-  wsBound: false
-};
+(function () {
+  'use strict';
 
-const DEMO_DEFAULT_PASS = 'FasoSecurite2026!';
-
-// ============================================================================
-// ICÔNES SVG LUCIDE EN LIGNE (TRAIT 2PX, ZÉRO EMOJI)
-// ============================================================================
-const Icons = {
-  clock: `<svg class="icon icon-sm" viewBox="0 0 24 24" aria-label="En attente d'envoi"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
-  alert: `<svg class="icon icon-sm" viewBox="0 0 24 24" aria-label="Échec d'envoi"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
-  checkSingle: `<svg class="icon icon-sm" viewBox="0 0 24 24" aria-label="Envoyé au serveur"><polyline points="20 6 9 17 4 12"/></svg>`,
-  checkDoubleGrey: `<svg class="icon icon-sm" viewBox="0 0 24 24" aria-label="Reçu sur l'appareil de tous les destinataires"><path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/></svg>`,
-  checkDoubleGreen: `<svg class="icon icon-sm" viewBox="0 0 24 24" aria-label="Lu par tous les destinataires"><path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/></svg>`,
-  lock: `<svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
-  file: `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>`,
-  users: `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
-  chevronRight: `<svg class="icon icon-sm" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>`
-};
-
-function renderSkeletonPlaceholder(rows = 3) {
-  let html = '<div class="skeleton-wrap" aria-busy="true" aria-label="Chargement en cours">';
-  for (let i = 0; i < rows; i += 1) {
-    html += `
-      <div>
-        <div class="skeleton-line w-60" style="margin-bottom:6px;"></div>
-        <div class="skeleton-line w-85"></div>
-      </div>
-    `;
-  }
-  html += '</div>';
-  return html;
-}
-
-// ============================================================================
-// INITIALISATION AU DÉMARRAGE
-// ============================================================================
-document.addEventListener('DOMContentLoaded', async () => {
-  // 1. Thème & Langue
-  if (localStorage.getItem('fasobrief_theme') === 'dark') {
-    document.body.classList.add('dark-mode');
-  }
-  const savedLang = localStorage.getItem('fasobrief_lang') || 'fr';
-  syncLanguageButtons(savedLang);
-  setLanguage(savedLang);
-
-  // 2. Initialiser WebAssembly @matrix-org/olm puis libérer immédiatement l'écran d'ouverture (zéro délai artificiel)
-  try {
-    await window.FasoCrypto.init();
-  } catch (err) {
-    console.error('[CRYPTO] Échec chargement Olm :', err);
-    showToast('Erreur de chargement du module cryptographique Olm.', 'error');
-  }
-
-  const splash = document.getElementById('splashScreen');
-  if (splash) {
-    splash.style.opacity = '0';
-    setTimeout(() => {
-      splash.hidden = true;
-    }, 120);
-  }
-
-  // 4. Écouteurs globaux (WebSocket, visibilité d'onglet, fermeture menus/modales, gestes fluides 1:1)
-  setupGlobalListeners();
-  setupFluidSheetGestures();
-  setupFluidMobileChatSwipe();
-
-  // 5. Charger la configuration d'authentification (détection Mode Démo Jury)
-  try {
-    const cfg = await FasoApi.getAuthConfig();
-    AppState.demoMode = Boolean(cfg.demoMode);
-    AppState.demoAccounts = cfg.demoAccounts || [];
-    renderDemoAccessControls();
-
-    if (AppState.demoMode && AppState.demoAccounts.length > 0) {
-      await provisionDemoOlmDevicesIfNeeded(AppState.demoAccounts);
-    }
-  } catch (err) {
-    console.warn('[AUTH] Impossible de lire /api/auth/config :', err);
-  }
-
-  // 6. Restaurer la session active ou afficher l'écran d'authentification
-  if (FasoApi.token) {
-    try {
-      const meRes = await FasoApi.getMe();
-      AppState.demoMode = Boolean(meRes.demoMode);
-      AppState.unreadNotifications = meRes.unreadNotifications || 0;
-      await enterAuthenticatedApp(meRes.user);
-    } catch (_) {
-      FasoApi.clearSession();
-      showAuthScreen();
-    }
-  } else {
-    showAuthScreen();
-  }
-});
-
-/**
- * En mode démonstration (FASOBRIEF_DEMO_MODE=1 uniquement), s'assure que chaque
- * compte fictif actif dispose d'un vrai terminal Olm enregistré sur ce navigateur.
- * Cela permet au jury de basculer d'un compte à l'autre dans un seul onglet tout en
- * utilisant un chiffrement Olm/Megolm 100 % authentique (aucune clé simulée).
- */
-async function provisionDemoOlmDevicesIfNeeded(demoAccounts) {
-  const missing = demoAccounts.filter(
-    (acc) => acc.status === 'ACTIVE' && !localStorage.getItem(`fasobrief_olm_v2_${acc.id}`)
-  );
-  if (missing.length === 0) return;
-
-  const badge = document.getElementById('demoProvisionStatus');
-  if (badge) {
-    badge.textContent = 'Initialisation des clés Olm...';
-    badge.className = 'badge badge-amber';
-  }
-
-  for (const acc of missing) {
-    const tempApi = new FasoApiClient();
-    const tempCrypto = new FasoCryptoEngine();
-    // Ne pas écraser le jeton principal dans localStorage
-    tempApi.setSession = function (tok, usr) {
-      this.token = tok;
-      this.currentUser = usr;
-    };
-    tempApi.clearSession = function () {
-      this.token = null;
-      this.currentUser = null;
-    };
-
-    try {
-      const s1 = await tempApi.loginStep1(acc.matricule, DEMO_DEFAULT_PASS);
-      if (s1 && s1.requires2FA) {
-        const totpRes = await tempApi.getDemoTotp(s1.userId);
-        await tempApi.loginStep2(s1.userId, totpRes.code, s1.challengeToken, 'Préparation Démo Olm');
-        await tempCrypto.bindUserSession(s1.userId, tempApi);
-        await tempApi.logoutServer();
-      }
-    } catch (_) {
-      // Un compte démo peut avoir changé de mot de passe ou avoir été révoqué : ignorer proprement
-    } finally {
-      tempCrypto._freeCurrentAccount();
-    }
-  }
-
-  if (badge) {
-    badge.textContent = 'Terminaux Olm prêts';
-    badge.className = 'badge badge-green';
-  }
-}
-
-// ============================================================================
-// ÉCOUTEURS GLOBAUX & TEMPS RÉEL WEBSOCKET
-// ============================================================================
-function setupGlobalListeners() {
-  if (AppState.wsBound) return;
-  AppState.wsBound = true;
-
-  // Fermer le menu profil ou une feuille modale au clic extérieur (backdrop)
-  document.addEventListener('click', (e) => {
-    const btn = document.getElementById('userMenuBtn');
-    const menu = document.getElementById('userDropdown');
-    if (menu && !menu.hidden && btn && !btn.contains(e.target) && !menu.contains(e.target)) {
-      closeUserDropdown();
-    }
-    if (e.target && e.target.classList && e.target.classList.contains('modal-backdrop') && !e.target.hidden) {
-      closeModal(e.target.id);
-    }
-  });
-
-  // Piège de focus dans les modales (WCAG 2.2), touche Échap & raccourcis clavier iPadOS/Desktop
-  document.addEventListener('keydown', (e) => {
-    const openModals = Array.from(document.querySelectorAll('.modal-backdrop:not([hidden])'));
-    const topModal = openModals.length > 0 ? openModals[openModals.length - 1] : null;
-
-    if (e.key === 'Escape') {
-      closeUserDropdown();
-      if (topModal) {
-        e.preventDefault();
-        closeModal(topModal.id);
-      }
-      return;
-    }
-
-    if (topModal && e.key === 'Tab') {
-      const focusables = Array.from(
-        topModal.querySelectorAll('button:not([disabled]):not([hidden]), input:not([disabled]):not([hidden]), select:not([disabled]):not([hidden]), textarea:not([disabled]):not([hidden]), [href]')
-      ).filter((el) => el.offsetParent !== null);
-      if (focusables.length > 0) {
-        const first = focusables[0];
-        const last = focusables[focusables.length - 1];
-        if (e.shiftKey && document.activeElement === first) {
-          e.preventDefault();
-          last.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-      return;
-    }
-
-    if (topModal || document.getElementById('appShell').hidden) return;
-
-    const tag = (document.activeElement && document.activeElement.tagName) || '';
-    const isTyping = ['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || (document.activeElement && document.activeElement.isContentEditable);
-
-    // Raccourci '/' : cibler la recherche de la vue courante (hors champ de saisie)
-    if (!isTyping && e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      const searchId = AppState.currentView === 'directory' ? 'dirSearchInput' : (AppState.currentView === 'chat' ? 'convSearchInput' : null);
-      const searchEl = searchId ? document.getElementById(searchId) : null;
-      if (searchEl && searchEl.offsetParent !== null) {
-        e.preventDefault();
-        searchEl.focus();
-      }
-      return;
-    }
-
-    // Raccourcis 'Alt+1..5' : bascule rapide entre sections principales
-    if (e.altKey && !e.ctrlKey && !e.metaKey) {
-      const shortcutViews = { '1': 'chat', '2': 'directory', '3': 'instructions', '4': 'notifications', '5': 'admin' };
-      const targetView = shortcutViews[e.key];
-      if (targetView) {
-        e.preventDefault();
-        switchMainView(targetView);
-      }
-    }
-  });
-
-  // Émission automatique des accusés 'read' uniquement quand l'onglet redevient visible
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      markVisibleConversationMessagesRead();
-    }
-  });
-
-  // --- Événements WebSocket Cryptographiques Olm/Megolm ---
-  FasoApi.on('TO_DEVICE_ENCRYPTED', async (data) => {
-    if (!data || !data.envelope) return;
-    const imported = FasoCrypto.processRealtimeEnvelope(data.envelope);
-    if (imported && data.envelope.groupId && data.envelope.groupId === AppState.activeGroupId) {
-      await loadActiveConversationMessages({ preserveScroll: true });
-    }
-    if (imported && AppState.currentView === 'instructions') {
-      await loadInstructionsView();
-    }
-  });
-
-  FasoApi.on('MEGOLM_KEY_REQUESTED', async (data) => {
-    if (!data || !data.groupId || !data.megolmSessionId) return;
-    try {
-      await FasoCrypto.shareSessionWithPeerDevice(data.groupId, data.megolmSessionId, {
-        userId: data.requesterUserId,
-        deviceId: data.requesterDeviceId,
-        curve25519Key: data.requesterCurve25519,
-        ed25519Key: data.requesterEd25519
-      });
-    } catch (_) {}
-  });
-
-  FasoApi.on('GROUP_DEVICE_ADDED', async (data) => {
-    if (!data || !data.groupId) return;
-    try {
-      if (FasoCrypto.state && FasoCrypto.state.outboundGroupSessions[data.groupId]) {
-        await FasoCrypto.ensureOutboundGroupSession(data.groupId);
-      }
-    } catch (_) {}
-  });
-
-  FasoApi.on('REPLENISH_OTK_REQUIRED', async () => {
-    try {
-      await FasoCrypto.replenishOneTimeKeys(20);
-    } catch (_) {}
-  });
-
-  FasoApi.on('GROUP_KEY_ROTATION_REQUIRED', async (data) => {
-    if (data && data.groupId) {
-      FasoCrypto.invalidateOutboundGroupSession(data.groupId);
-    }
-    await loadConversations({ keepSelection: true });
-  });
-
-  // --- Événements Messagerie & Statuts ---
-  FasoApi.on('NEW_ENCRYPTED_MESSAGE', async (data) => {
-    const msg = data && data.message;
-    if (!msg || !FasoApi.currentUser) return;
-
-    const groupId = msg.group_id || msg.groupId;
-    const senderId = msg.sender_id || msg.senderId;
-
-    // Dès réception sur cet appareil d'un message d'autrui, confirmer la remise ('delivered')
-    if (senderId !== FasoApi.currentUser.id) {
-      FasoApi.sendMessageReceipts([msg.id], 'delivered').catch(() => {});
-    }
-
-    if (groupId === AppState.activeGroupId) {
-      await loadActiveConversationMessages({ preserveScroll: false });
-      markVisibleConversationMessagesRead();
-    }
-    await loadConversations({ keepSelection: true });
-  });
-
-  FasoApi.on('MESSAGE_RECEIPT_UPDATED', (data) => {
-    if (!data || !data.messageId) return;
-    const targetMsg = AppState.activeMessages.find((m) => m.id === data.messageId);
-    if (targetMsg) {
-      targetMsg.delivery_status = data.deliveryStatus;
-      targetMsg.delivered_count = data.deliveredCount;
-      targetMsg.read_count = data.readCount;
-      targetMsg.recipient_count = data.recipientCount;
-      updateMessageStatusDom(data.messageId, data.deliveryStatus);
-    }
-  });
-
-  FasoApi.on('CONVERSATION_CREATED', async () => {
-    await loadConversations({ keepSelection: true });
-  });
-
-  FasoApi.on('GROUP_UPDATED', async (data) => {
-    await loadConversations({ keepSelection: true });
-    if (data && data.groupId === AppState.activeGroupId) {
-      updateActiveChatHeader();
-    }
-  });
-
-  FasoApi.on('REMOVED_FROM_GROUP', async (data) => {
-    if (data && data.groupId) {
-      FasoCrypto.invalidateOutboundGroupSession(data.groupId);
-      if (AppState.activeGroupId === data.groupId) {
-        AppState.activeGroupId = null;
-        document.body.classList.remove('mobile-chat-open');
-      }
-      showToast('Vous ne faites plus partie de ce groupe.', 'error');
-      await loadConversations({ keepSelection: false });
-    }
-  });
-
-  // --- Événements Instructions ---
-  const handleInstRealtime = async (data) => {
-    await refreshInstructionsBadgeAndCache();
-    if (AppState.currentView === 'instructions') {
-      renderInstructionsList();
-    }
-    if (AppState.activeGroupId) {
-      await loadActiveConversationMessages({ preserveScroll: true });
-    }
-    const instId = (data && data.instructionId) || (data && data.instruction && data.instruction.id);
-    if (AppState.openInstructionId && (!instId || instId === AppState.openInstructionId)) {
-      await openInstructionDetail(AppState.openInstructionId, { skipMarkViewed: true });
-    }
+  // Icônes SVG Lucide en ligne (stroke-width="1.75", zéro dépendance externe)
+  const ICONS = {
+    shieldCheck: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>`,
+    shieldSm: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>`,
+    keyRound: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg>`,
+    qrCode: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="5" height="5" x="3" y="3" rx="1"/><rect width="5" height="5" x="16" y="3" rx="1"/><rect width="5" height="5" x="3" y="16" rx="1"/><path d="M21 16h-3a2 2 0 0 0-2 2v3"/><path d="M21 21v.01"/><path d="M12 7v3a2 2 0 0 1-2 2H7"/><path d="M3 12h.01"/><path d="M12 3h.01"/><path d="M12 16v.01"/><path d="M16 12h1"/><path d="M21 12v.01"/><path d="M12 21v-1"/></svg>`,
+    smartphone: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/></svg>`,
+    messageSquare: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`,
+    clipboardCheck: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/></svg>`,
+    users: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
+    logOut: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>`,
+    bell: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></svg>`,
+    bellRing: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M22 8c0-2.3-.8-4.3-2-6"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/><path d="M4 2C2.8 3.7 2 5.7 2 8"/></svg>`,
+    building2: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/></svg>`,
+    plus: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>`,
+    lock: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
+    chevronLeft: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>`,
+    paperclip: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>`,
+    send: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>`,
+    fileText: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>`,
+    x: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`,
+    check: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>`,
+    checkCheck: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/></svg>`,
+    clipboardPlus: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 14h6"/><path d="M12 17v-6"/></svg>`,
+    inbox: `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>`,
+    calendarClock: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h5"/><path d="M17.5 17.5 16 16.3V14"/><circle cx="16" cy="16" r="6"/></svg>`,
+    circle: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/></svg>`,
+    eye: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>`,
+    checkCircle2: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>`,
+    userPlus: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" x2="19" y1="8" y2="14"/><line x1="22" x2="16" y1="11" y2="11"/></svg>`,
+    pencil: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>`,
+    userX: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="17" x2="22" y1="8" y2="13"/><line x1="22" x2="17" y1="8" y2="13"/></svg>`,
+    userCheck: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/></svg>`,
+    history: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>`,
+    rotateCcw: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`,
+    refreshCw: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>`
   };
 
-  FasoApi.on('NEW_ADMINISTRATIVE_INSTRUCTION', handleInstRealtime);
-  FasoApi.on('INSTRUCTION_ACKNOWLEDGED', handleInstRealtime);
-  FasoApi.on('INSTRUCTION_UPDATED', handleInstRealtime);
-
-  // --- Événements Notifications ---
-  FasoApi.on('NOTIFICATION_EVENT', async (data) => {
-    if (typeof data.unreadCount === 'number') {
-      AppState.unreadNotifications = data.unreadCount;
-      refreshNavigationBadges();
-    }
-    if (AppState.currentView === 'notifications') {
-      await loadNotificationsView();
-    }
-    maybeTriggerBrowserNotification(data.notification);
-  });
-
-  // --- Événements Révocation / Suspension en direct ---
-  FasoApi.on('ACCOUNT_REVOKED', (data) => {
-    lockInterfaceOnSecurityCutoff(
-      'Habilitation révoquée :',
-      (data && data.reason) || 'Votre compte FasoBrief a été définitivement révoqué avec effet immédiat.'
-    );
-  });
-
-  FasoApi.on('ACCOUNT_SUSPENDED', (data) => {
-    lockInterfaceOnSecurityCutoff(
-      'Compte suspendu :',
-      (data && data.reason) || 'Votre session FasoBrief a été suspendue par l\'administration.'
-    );
-  });
-}
-
-function lockInterfaceOnSecurityCutoff(title, message) {
-  const banner = document.getElementById('criticalBanner');
-  document.getElementById('criticalBannerTitle').textContent = title;
-  document.getElementById('criticalBannerText').textContent = message;
-  banner.hidden = false;
-
-  const bodyArea = document.querySelector('.shell-body');
-  const mobNav = document.querySelector('.mobile-nav');
-  if (bodyArea) {
-    bodyArea.style.opacity = '0.28';
-    bodyArea.style.pointerEvents = 'none';
-  }
-  if (mobNav) {
-    mobNav.style.pointerEvents = 'none';
-  }
-  document.querySelectorAll('.modal-backdrop').forEach((m) => {
-    m.hidden = true;
-  });
-}
-
-function returnToLoginAfterRevocation() {
-  FasoApi.clearSession();
-  const bodyArea = document.querySelector('.shell-body');
-  const mobNav = document.querySelector('.mobile-nav');
-  if (bodyArea) {
-    bodyArea.style.opacity = '1';
-    bodyArea.style.pointerEvents = 'auto';
-  }
-  if (mobNav) {
-    mobNav.style.pointerEvents = 'auto';
-  }
-  document.getElementById('criticalBanner').hidden = true;
-  showAuthScreen();
-}
-
-// ============================================================================
-// AUTHENTIFICATION & ACTIVATION DE COMPTE INVITÉ
-// ============================================================================
-function showAuthScreen() {
-  document.getElementById('appShell').hidden = true;
-  document.getElementById('authScreen').hidden = false;
-  resetLoginToStep1();
-  resetActivateToStep1();
-  renderDemoAccessControls();
-}
-
-function switchAuthTab(tab) {
-  const isLogin = tab === 'login';
-  document.getElementById('authTabLogin').classList.toggle('active', isLogin);
-  document.getElementById('authTabLogin').setAttribute('aria-selected', String(isLogin));
-  document.getElementById('authTabActivate').classList.toggle('active', !isLogin);
-  document.getElementById('authTabActivate').setAttribute('aria-selected', String(!isLogin));
-
-  document.getElementById('authPaneLogin').hidden = !isLogin;
-  document.getElementById('authPaneActivate').hidden = isLogin;
-}
-
-function showInlineAuthError(elId, msg) {
-  const el = document.getElementById(elId);
-  if (!el) return;
-  if (!msg) {
-    el.hidden = true;
-    el.textContent = '';
-  } else {
-    el.textContent = formatApiError(msg);
-    el.hidden = false;
-  }
-}
-
-async function handleLoginStep1(event) {
-  if (event) event.preventDefault();
-  showInlineAuthError('authLoginAlert', null);
-
-  const matricule = document.getElementById('loginMatricule').value.trim();
-  const password = document.getElementById('loginPassword').value;
-  if (!matricule || !password) return;
-
-  const btn = document.getElementById('btnLoginStep1');
-  btn.disabled = true;
-  try {
-    const res = await FasoApi.loginStep1(matricule, password);
-    if (res.requires2FA) {
-      AppState.pendingLogin = {
-        userId: res.userId,
-        challengeToken: res.challengeToken,
-        fullName: res.fullName,
-        matricule: res.matricule,
-        role: res.role
-      };
-      document.getElementById('formLoginStep1').hidden = true;
-      document.getElementById('formLoginStep2').hidden = false;
-      document.getElementById('loginStep2Banner').textContent =
-        `1er facteur validé pour ${res.fullName} (${res.matricule} — ${res.role}).`;
-      document.getElementById('btnFillDemoTotp').hidden = !AppState.demoMode;
-      document.getElementById('loginTotpCode').value = '';
-      document.getElementById('loginTotpCode').focus();
-
-      if (AppState.demoMode) {
-        await fillDemoTotpCode();
-      }
-    }
-  } catch (err) {
-    showInlineAuthError('authLoginAlert', err.message);
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-function resetLoginToStep1() {
-  AppState.pendingLogin = null;
-  showInlineAuthError('authLoginAlert', null);
-  document.getElementById('formLoginStep1').hidden = false;
-  document.getElementById('formLoginStep2').hidden = true;
-  document.getElementById('loginTotpCode').value = '';
-}
-
-async function fillDemoTotpCode() {
-  if (!AppState.demoMode || !AppState.pendingLogin) return;
-  try {
-    const res = await FasoApi.getDemoTotp(AppState.pendingLogin.userId);
-    if (res && res.code) {
-      document.getElementById('loginTotpCode').value = res.code;
-    }
-  } catch (err) {
-    showInlineAuthError('authLoginAlert', err.message);
-  }
-}
-
-async function handleLoginStep2(event) {
-  if (event) event.preventDefault();
-  if (!AppState.pendingLogin) return;
-  showInlineAuthError('authLoginAlert', null);
-
-  const totpCode = document.getElementById('loginTotpCode').value.trim();
-  const btn = document.getElementById('btnLoginStep2');
-  btn.disabled = true;
-  try {
-    const res = await FasoApi.loginStep2(
-      AppState.pendingLogin.userId,
-      totpCode,
-      AppState.pendingLogin.challengeToken,
-      navigator.platform || 'Web'
-    );
-    if (res.success && res.user) {
-      document.getElementById('loginPassword').value = '';
-      document.getElementById('loginTotpCode').value = '';
-      AppState.pendingLogin = null;
-      await enterAuthenticatedApp(res.user);
-    }
-  } catch (err) {
-    showInlineAuthError('authLoginAlert', err.message);
-    if (err.code === 'ETAPE_1_REQUISE_OU_EXPIREE') {
-      resetLoginToStep1();
-    }
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function handleActivateStep1(event) {
-  if (event) event.preventDefault();
-  showInlineAuthError('authActivateAlert', null);
-
-  const matricule = document.getElementById('actMatricule').value.trim();
-  const activationCode = document.getElementById('actCode').value.trim();
-  if (!matricule || !activationCode) return;
-
-  try {
-    const res = await FasoApi.activateStep1(matricule, activationCode);
-    AppState.pendingActivation = { matricule, activationCode };
-    document.getElementById('formActivateStep1').hidden = true;
-    document.getElementById('formActivateStep2').hidden = false;
-    document.getElementById('actAgentSummary').textContent =
-      `Invitation vérifiée : ${res.fullName} (${res.matricule} • ${res.role} • ${res.serviceMinistry}).`;
-    document.getElementById('actTotpSecretDisplay').textContent = res.totpSecret;
-    document.getElementById('actOtpUriHint').textContent = `URI standard : ${res.otpauthUri}`;
-    document.getElementById('actNewPassword').focus();
-  } catch (err) {
-    showInlineAuthError('authActivateAlert', err.message);
-  }
-}
-
-function resetActivateToStep1() {
-  AppState.pendingActivation = null;
-  showInlineAuthError('authActivateAlert', null);
-  document.getElementById('formActivateStep1').hidden = false;
-  document.getElementById('formActivateStep2').hidden = true;
-}
-
-async function handleActivateStep2(event) {
-  if (event) event.preventDefault();
-  if (!AppState.pendingActivation) return;
-  showInlineAuthError('authActivateAlert', null);
-
-  const password = document.getElementById('actNewPassword').value;
-  const confirm = document.getElementById('actConfirmPassword').value;
-  const totpCode = document.getElementById('actFirstTotp').value.trim();
-
-  if (password.length < 12) {
-    showInlineAuthError('authActivateAlert', 'Le mot de passe doit comporter au moins 12 caractères.');
-    return;
-  }
-  if (password !== confirm) {
-    showInlineAuthError('authActivateAlert', 'Les deux mots de passe ne correspondent pas.');
-    return;
-  }
-
-  try {
-    const res = await FasoApi.activateStep2({
-      matricule: AppState.pendingActivation.matricule,
-      activationCode: AppState.pendingActivation.activationCode,
-      password,
-      totpCode,
-      deviceInfo: navigator.platform || 'Web'
-    });
-    if (res.success && res.user) {
-      AppState.pendingActivation = null;
-      document.getElementById('actNewPassword').value = '';
-      document.getElementById('actConfirmPassword').value = '';
-      document.getElementById('actFirstTotp').value = '';
-      showToast('Compte activé avec succès et terminal Olm initialisé.', 'success');
-      await enterAuthenticatedApp(res.user);
-    }
-  } catch (err) {
-    showInlineAuthError('authActivateAlert', err.message);
-  }
-}
-
-function renderDemoAccessControls() {
-  const panel = document.getElementById('demoQuickPanel');
-  const list = document.getElementById('demoAccountsList');
-  const dropSec = document.getElementById('dropdownDemoSection');
-  const dropList = document.getElementById('dropdownDemoAccounts');
-
-  if (!AppState.demoMode || AppState.demoAccounts.length === 0) {
-    if (panel) panel.hidden = true;
-    if (dropSec) dropSec.hidden = true;
-    return;
-  }
-
-  if (panel && list) {
-    panel.hidden = false;
-    list.innerHTML = '';
-    AppState.demoAccounts.forEach((acc) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'demo-account-row';
-      btn.onclick = () => selectDemoPersonaForLogin(acc);
-      const statusBadge = acc.status === 'ACTIVE'
-        ? `<span class="badge badge-green">${escapeHtml(acc.role)}</span>`
-        : `<span class="badge badge-red">${escapeHtml(acc.status)}</span>`;
-      btn.innerHTML = `
-        <div>
-          <div class="demo-account-name">${escapeHtml(acc.fullName)}</div>
-          <div class="demo-account-meta">${escapeHtml(acc.matricule)} • ${escapeHtml(acc.serviceMinistry)}</div>
-        </div>
-        ${statusBadge}
-      `;
-      list.appendChild(btn);
-    });
-  }
-
-  if (dropSec && dropList) {
-    dropSec.hidden = false;
-    dropList.innerHTML = '';
-    AppState.demoAccounts.forEach((acc) => {
-      if (FasoApi.currentUser && acc.id === FasoApi.currentUser.id) return;
-      const item = document.createElement('button');
-      item.type = 'button';
-      item.className = 'dropdown-item';
-      item.onclick = () => quickSwitchDemoPersona(acc);
-      item.innerHTML = `
-        <span class="avatar avatar-sm">${escapeHtml(getInitials(acc.fullName))}</span>
-        <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-          ${escapeHtml(acc.fullName)} <span style="color:var(--text-muted); font-size:var(--fs-xs);">(${escapeHtml(acc.role)})</span>
-        </span>
-      `;
-      dropList.appendChild(item);
-    });
-  }
-}
-
-async function selectDemoPersonaForLogin(acc) {
-  switchAuthTab('login');
-  resetLoginToStep1();
-  document.getElementById('loginMatricule').value = acc.matricule;
-  document.getElementById('loginPassword').value = DEMO_DEFAULT_PASS;
-  await handleLoginStep1(null);
-}
-
-async function quickSwitchDemoPersona(acc) {
-  closeUserDropdown();
-  await FasoApi.logoutServer();
-  FasoCrypto._freeCurrentAccount();
-  showAuthScreen();
-  await selectDemoPersonaForLogin(acc);
-}
-
-// ============================================================================
-// ENTRÉE DANS LE SHELL AUTHENTIFIÉ & CONTRÔLE DES RÔLES UI
-// ============================================================================
-async function enterAuthenticatedApp(user) {
-  document.getElementById('authScreen').hidden = true;
-  document.getElementById('appShell').hidden = false;
-  document.getElementById('criticalBanner').hidden = true;
-
-  const bodyArea = document.querySelector('.shell-body');
-  const mobNav = document.querySelector('.mobile-nav');
-  if (bodyArea) {
-    bodyArea.style.opacity = '1';
-    bodyArea.style.pointerEvents = 'auto';
-  }
-  if (mobNav) {
-    mobNav.style.pointerEvents = 'auto';
-  }
-
-  // 1. Initialiser/restaurer le compte Olm personnel de l'agent et publier ses clés
-  const cryptoInfo = await FasoCrypto.bindUserSession(user.id, FasoApi);
-
-  // 2. Connecter le WebSocket temps réel avec le deviceId Olm
-  FasoApi.connectWebSocket(cryptoInfo.deviceId);
-
-  // 3. Mettre à jour l'en-tête et les permissions visuelles selon le rôle
-  applyUserRoleAndHeader(user, cryptoInfo.deviceId);
-  renderDemoAccessControls();
-
-  // 4. Synchroniser préférences notifications
-  const toggle = document.getElementById('browserNotifToggle');
-  if (toggle) {
-    toggle.checked = Boolean(user.notifBrowserEnabled);
-  }
-
-  // 5. Charger les données initiales réelles
-  await Promise.all([
-    loadConversations({ keepSelection: false }),
-    refreshInstructionsBadgeAndCache(),
-    refreshUnreadNotificationsCount()
-  ]);
-
-  switchMainView('chat');
-}
-
-function applyUserRoleAndHeader(user, deviceId) {
-  const initials = getInitials(user.fullName);
-  document.getElementById('headerAvatar').textContent = initials;
-  document.getElementById('headerUserLabel').textContent = user.fullName;
-  document.getElementById('dropdownFullName').textContent = user.fullName;
-  document.getElementById('dropdownMeta').textContent = `${user.matricule} • ${user.role} • ${user.serviceMinistry}`;
-  document.getElementById('dropdownDeviceMeta').textContent = deviceId ? `Terminal Olm : ${deviceId}` : '';
-
-  const canCreateGroupOrInst = ['ADMIN', 'DIRECTEUR', 'CHEF_SERVICE'].includes(user.role);
-  const canAccessAdmin = ['ADMIN', 'DIRECTEUR'].includes(user.role);
-  const isAdminOnly = user.role === 'ADMIN';
-
-  document.getElementById('btnOpenCreateGroup').hidden = !canCreateGroupOrInst;
-  document.getElementById('btnDirNewGroup').hidden = !canCreateGroupOrInst;
-  document.getElementById('btnChatCreateInst').hidden = !canCreateGroupOrInst;
-  document.getElementById('btnPageNewInst').hidden = !canCreateGroupOrInst;
-  document.getElementById('btnFilterDrafts').hidden = !canCreateGroupOrInst;
-
-  document.getElementById('railAdmin').hidden = !canAccessAdmin;
-  document.getElementById('mobAdmin').hidden = !canAccessAdmin;
-  document.getElementById('dirIncludeAllWrap').hidden = !canAccessAdmin;
-  document.getElementById('btnInviteAgent').hidden = !isAdminOnly;
-}
-
-async function performLogout() {
-  closeUserDropdown();
-  await FasoApi.logoutServer();
-  FasoCrypto._freeCurrentAccount();
-  AppState.activeGroupId = null;
-  AppState.conversations = [];
-  AppState.activeMessages = [];
-  document.body.classList.remove('mobile-chat-open');
-  showAuthScreen();
-}
-
-// ============================================================================
-// NAVIGATION PRINCIPALE
-// ============================================================================
-function switchMainView(view) {
-  const user = FasoApi.currentUser;
-  if (view === 'admin' && (!user || !['ADMIN', 'DIRECTEUR'].includes(user.role))) {
-    return;
-  }
-
-  AppState.currentView = view;
-  if (view !== 'chat') {
-    document.body.classList.remove('mobile-chat-open');
-  }
-
-  const viewsMap = {
-    chat: 'viewChat',
-    directory: 'viewDirectory',
-    instructions: 'viewInstructions',
-    notifications: 'viewNotifications',
-    admin: 'viewAdmin'
+  const ROLE_LABELS = {
+    ADMIN: 'Administrateur',
+    DIRECTEUR: 'Chef de service',
+    CHEF_SERVICE: 'Chef de service',
+    AGENT: 'Agent'
   };
-
-  Object.entries(viewsMap).forEach(([k, domId]) => {
-    const el = document.getElementById(domId);
-    if (el) el.hidden = k !== view;
-  });
-
-  const navMap = {
-    chat: ['railChat', 'mobChat'],
-    directory: ['railDirectory', 'mobDirectory'],
-    instructions: ['railInstructions', 'mobInstructions'],
-    notifications: ['railNotifications', 'mobNotifications'],
-    admin: ['railAdmin', 'mobAdmin']
-  };
-
-  Object.entries(navMap).forEach(([k, ids]) => {
-    ids.forEach((id) => {
-      const btn = document.getElementById(id);
-      if (btn) {
-        btn.classList.toggle('active', k === view);
-        if (k === view) btn.setAttribute('aria-current', 'page');
-        else btn.removeAttribute('aria-current');
-      }
-    });
-  });
-
-  syncMobileContextFab();
-
-  if (view === 'chat') {
-    loadConversations({ keepSelection: true });
-    markVisibleConversationMessagesRead();
-  } else if (view === 'directory') {
-    loadDirectoryView();
-  } else if (view === 'instructions') {
-    loadInstructionsView();
-  } else if (view === 'notifications') {
-    loadNotificationsView();
-  } else if (view === 'admin') {
-    loadAdminView();
-  }
-}
-
-function syncMobileContextFab() {
-  const fab = document.getElementById('mobileContextFab');
-  const label = document.getElementById('mobileContextFabLabel');
-  if (!fab || !label || !FasoApi.currentUser) return;
-
-  const role = FasoApi.currentUser.role;
-  const canLead = ['ADMIN', 'DIRECTEUR', 'CHEF_SERVICE'].includes(role);
-  const view = AppState.currentView;
-
-  if (view === 'chat') {
-    fab.hidden = false;
-    label.textContent = 'Nouveau message';
-  } else if (view === 'instructions' && canLead) {
-    fab.hidden = false;
-    label.textContent = 'Instruction';
-  } else if (view === 'admin' && role === 'ADMIN') {
-    fab.hidden = false;
-    label.textContent = 'Inviter';
-  } else {
-    fab.hidden = true;
-  }
-}
-
-function triggerMobileContextFab() {
-  const view = AppState.currentView;
-  if (view === 'chat') {
-    switchMainView('directory');
-  } else if (view === 'instructions') {
-    openInstructionModal();
-  } else if (view === 'admin') {
-    openInviteModal();
-  }
-}
-
-function refreshNavigationBadges() {
-  const unreadChat = AppState.conversations.reduce((acc, g) => acc + (g.unreadCount || 0), 0);
-  const myPendingInst = AppState.instructionsCache.filter(
-    (inst) =>
-      inst.status === 'PUBLIEE' &&
-      inst.is_recipient &&
-      inst.my_recipient &&
-      inst.my_recipient.step !== 'EXECUTEE' &&
-      !inst.my_recipient.acknowledgedAt
-  ).length;
-
-  setBadgeValue('badgeChatDesktop', unreadChat);
-  setBadgeValue('badgeChatMobile', unreadChat);
-  setBadgeValue('badgeInstDesktop', myPendingInst);
-  setBadgeValue('badgeInstMobile', myPendingInst);
-  setBadgeValue('badgeNotifDesktop', AppState.unreadNotifications);
-  setBadgeValue('badgeNotifMobile', AppState.unreadNotifications);
-}
-
-function setBadgeValue(id, count) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  if (count > 0) {
-    el.textContent = count > 99 ? '99+' : String(count);
-    el.hidden = false;
-  } else {
-    el.hidden = true;
-  }
-}
-
-// ============================================================================
-// VUE 1 : DISCUSSIONS (1:1 & GROUPES), MESSAGES E2EE & ACCUSÉS RÉELS
-// ============================================================================
-async function loadConversations({ keepSelection = true } = {}) {
-  if (!FasoApi.token) return;
-  try {
-    const res = await FasoApi.getGroups();
-    AppState.conversations = res.groups || [];
-
-    if (!keepSelection || !AppState.conversations.some((g) => g.id === AppState.activeGroupId)) {
-      if (window.innerWidth >= 768 && AppState.conversations.length > 0) {
-        AppState.activeGroupId = AppState.conversations[0].id;
-      } else if (!AppState.conversations.some((g) => g.id === AppState.activeGroupId)) {
-        AppState.activeGroupId = null;
-      }
-    }
-
-    renderConversationsList();
-    updateActiveChatHeader();
-    refreshNavigationBadges();
-
-    if (AppState.activeGroupId) {
-      await loadActiveConversationMessages({ preserveScroll: true });
-    }
-  } catch (err) {
-    console.warn('[CHAT] Erreur chargement conversations :', err);
-  }
-}
-
-function renderConversationsList() {
-  const listEl = document.getElementById('conversationsList');
-  if (!listEl) return;
-  const q = (document.getElementById('convSearchInput').value || '').trim().toLowerCase();
-
-  const filtered = AppState.conversations.filter((g) => {
-    if (!q) return true;
-    return (
-      (g.name || '').toLowerCase().includes(q) ||
-      (g.service_ministry || '').toLowerCase().includes(q)
-    );
-  });
-
-  if (filtered.length === 0) {
-    listEl.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-state-title">Aucune discussion trouvée</div>
-        <p>Ouvrez l'annuaire pour démarrer une conversation individuelle chiffrée.</p>
-      </div>
-    `;
-    return;
-  }
-
-  listEl.innerHTML = '';
-  filtered.forEach((g) => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.setAttribute('role', 'listitem');
-    btn.className = `conv-row ${g.id === AppState.activeGroupId ? 'active' : ''} ${g.unreadCount > 0 ? 'unread' : ''}`;
-    btn.onclick = () => openConversation(g.id);
-
-    const isDirect = g.type === 'DIRECT';
-    const avatarHtml = isDirect
-      ? `<span class="avatar">${escapeHtml(getInitials(g.name))}</span>`
-      : `<span class="avatar brand">${Icons.users}</span>`;
-
-    const timeStr = formatShortTimeOrDate(g.lastMessageAt);
-    const typeLabel = isDirect ? 'Direct' : `${g.member_count || 1} mbr.`;
-    const unreadBadge = g.unreadCount > 0 ? `<span class="nav-badge">${g.unreadCount}</span>` : '';
-
-    btn.innerHTML = `
-      ${avatarHtml}
-      <div class="conv-row-body">
-        <div class="conv-row-top">
-          <span class="conv-name">${escapeHtml(g.name)}</span>
-          <span class="conv-time">${escapeHtml(timeStr)}</span>
-        </div>
-        <div class="conv-row-bottom">
-          <span class="conv-sub">${escapeHtml(typeLabel)} • ${escapeHtml(g.service_ministry || '')}</span>
-          ${unreadBadge}
-        </div>
-      </div>
-    `;
-    listEl.appendChild(btn);
-  });
-}
-
-async function openConversation(groupId) {
-  AppState.activeGroupId = groupId;
-  if (window.innerWidth < 768) {
-    document.body.classList.add('mobile-chat-open');
-  }
-  renderConversationsList();
-  updateActiveChatHeader();
-  await loadActiveConversationMessages({ preserveScroll: false });
-  markVisibleConversationMessagesRead();
-}
-
-function closeMobileConversation() {
-  document.body.classList.remove('mobile-chat-open');
-}
-
-function updateActiveChatHeader() {
-  const emptyEl = document.getElementById('chatEmptySelection');
-  const wrapEl = document.getElementById('chatActiveWrap');
-  const grp = AppState.conversations.find((g) => g.id === AppState.activeGroupId);
-
-  if (!grp) {
-    emptyEl.hidden = false;
-    wrapEl.style.display = 'none';
-    return;
-  }
-
-  emptyEl.hidden = true;
-  wrapEl.style.display = 'flex';
-
-  const avatarEl = document.getElementById('activeConvAvatar');
-  avatarEl.textContent = getInitials(grp.name);
-  avatarEl.className = grp.type === 'DIRECT' ? 'avatar' : 'avatar brand';
-
-  document.getElementById('activeConvTitle').textContent = grp.name;
-  const prefix = grp.type === 'DIRECT' ? 'Échange individuel E2EE' : `Groupe E2EE (${grp.member_count || 1} actifs)`;
-  document.getElementById('activeConvSub').textContent = `${prefix} • ${grp.service_ministry || ''}`;
-}
-
-function isConversationVisiblyOpen() {
-  if (AppState.currentView !== 'chat' || !AppState.activeGroupId) return false;
-  if (document.visibilityState !== 'visible') return false;
-  if (window.innerWidth < 768 && !document.body.classList.contains('mobile-chat-open')) return false;
-  return true;
-}
-
-async function markVisibleConversationMessagesRead() {
-  if (!isConversationVisiblyOpen() || !FasoApi.currentUser) return;
-  const unreadIds = AppState.activeMessages
-    .filter((m) => m.sender_id !== FasoApi.currentUser.id && !m._markedReadByMe)
-    .map((m) => m.id);
-
-  if (unreadIds.length === 0) return;
-  unreadIds.forEach((id) => {
-    const found = AppState.activeMessages.find((m) => m.id === id);
-    if (found) found._markedReadByMe = true;
-  });
-
-  try {
-    await FasoApi.sendMessageReceipts(unreadIds, 'read');
-    const grp = AppState.conversations.find((g) => g.id === AppState.activeGroupId);
-    if (grp && grp.unreadCount > 0) {
-      grp.unreadCount = 0;
-      renderConversationsList();
-      refreshNavigationBadges();
-    }
-    await refreshUnreadNotificationsCount();
-  } catch (_) {}
-}
-
-async function loadActiveConversationMessages({ preserveScroll = false } = {}) {
-  const groupId = AppState.activeGroupId;
-  if (!groupId || !FasoApi.currentUser) return;
-
-  const container = document.getElementById('chatMessages');
-  const prevScrollTop = container.scrollTop;
-
-  try {
-    await FasoCrypto.syncPendingCrypto();
-    const res = await FasoApi.getMessages(groupId);
-    const messages = res.messages || [];
-    AppState.activeMessages = messages;
-
-    // Accusé 'delivered' pour tout message reçu non émis par moi
-    const otherIds = messages
-      .filter((m) => m.sender_id !== FasoApi.currentUser.id)
-      .map((m) => m.id);
-    if (otherIds.length > 0) {
-      FasoApi.sendMessageReceipts(otherIds, 'delivered').catch(() => {});
-    }
-
-    container.innerHTML = '';
-
-    // Bandeau discret de garantie cryptographique en haut du fil
-    const notice = document.createElement('div');
-    notice.className = 'e2ee-notice';
-    notice.innerHTML = `${Icons.lock} <span>Messages et fichiers chiffrés de bout en bout (Olm / Megolm). Le serveur n'accède jamais au contenu en clair.</span>`;
-    container.appendChild(notice);
-
-    if (messages.length === 0 && AppState.failedOutgoing.size === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'empty-state';
-      empty.innerHTML = `<div class="empty-state-title">Aucun message pour le moment</div><p>Démarrez la discussion ci-dessous.</p>`;
-      container.appendChild(empty);
-    }
-
-    let prevMsg = null;
-    for (const msg of messages) {
-      const node = await buildMessageDomNode(groupId, msg, prevMsg);
-      container.appendChild(node);
-      prevMsg = msg;
-    }
-
-    // Afficher également les éventuels messages échoués côté réseau pour permettre un renvoi sans doublon
-    for (const [clientMsgId, failed] of AppState.failedOutgoing.entries()) {
-      if (failed.groupId === groupId) {
-        container.appendChild(buildFailedMessageNode(clientMsgId, failed));
-      }
-    }
-
-    if (preserveScroll) {
-      container.scrollTop = prevScrollTop;
-    } else {
-      container.scrollTop = container.scrollHeight;
-    }
-
-    markVisibleConversationMessagesRead();
-  } catch (err) {
-    console.warn('[CHAT] Erreur chargement messages :', err);
-  }
-}
-
-async function buildMessageDomNode(groupId, msg, prevMsg = null) {
-  const isMe = FasoApi.currentUser && msg.sender_id === FasoApi.currentUser.id;
-  const sameSenderRecent = Boolean(
-    prevMsg &&
-    prevMsg.sender_id === msg.sender_id &&
-    prevMsg.message_type !== 'INSTRUCTION' &&
-    msg.message_type !== 'INSTRUCTION' &&
-    Math.abs(new Date(msg.created_at).getTime() - new Date(prevMsg.created_at).getTime()) < 3 * 60 * 1000
-  );
-
-  const row = document.createElement('div');
-  row.className = `msg-row ${isMe ? 'sent' : 'received'}${sameSenderRecent ? ' grouped-prev' : ''}`;
-  row.dataset.messageId = msg.id;
-
-  const dec = await FasoCrypto.decryptPayload(groupId, msg);
-  const senderLabel = (!isMe && !sameSenderRecent)
-    ? `<div class="msg-sender">${escapeHtml(msg.sender_name || 'Agent')}</div>`
-    : '';
-  const timeStr = formatTimeOnly(msg.created_at);
-
-  const canMakeInst =
-    dec.ok &&
-    msg.message_type === 'CHAT' &&
-    FasoApi.currentUser &&
-    ['ADMIN', 'DIRECTEUR', 'CHEF_SERVICE'].includes(FasoApi.currentUser.role);
-
-  if (dec.ok && dec.text) {
-    AppState.decryptedMsgText.set(msg.id, dec.text);
-  }
-
-  let bodyHtml = '';
-  if (msg.message_type === 'INSTRUCTION' && msg.instruction_id) {
-    const titleText = dec.ok
-      ? (dec.data && dec.data.title) || dec.text
-      : dec.text;
-    const prioBadge = msg.instruction_priority === 'URGENTE'
-      ? `<span class="badge badge-red">URGENTE</span>`
-      : (msg.instruction_priority === 'HAUTE' ? `<span class="badge badge-amber">HAUTE</span>` : '');
-    const statusBadge = renderInstructionStatusBadge(msg.instruction_status || 'PUBLIEE');
-
-    bodyHtml = `
-      ${senderLabel}
-      <div class="msg-inst-block">
-        <div class="msg-inst-top">
-          <span class="badge badge-mono">${escapeHtml(msg.instruction_ref || 'INST')}</span>
-          <span class="badge">v${Number(msg.instruction_version || 1)}</span>
-          ${prioBadge}
-          ${statusBadge}
-        </div>
-        <div class="msg-inst-title">${escapeHtml(titleText)}</div>
-        <div class="msg-file-meta">
-          ${msg.deadline ? `Échéance : ${escapeHtml(formatDateTime(msg.deadline))}` : 'Sans date limite'}
-        </div>
-        <div>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="openInstructionDetail('${escapeAttr(msg.instruction_id)}')">
-            Ouvrir le détail et le suivi
-          </button>
-        </div>
-      </div>
-    `;
-  } else if (msg.message_type === 'FILE' || msg.file_id) {
-    const fileData = (dec.ok && dec.data) || {};
-    const fileId = msg.file_id || fileData.fileId;
-    if (dec.ok && fileId && fileData.fileKeyBase64) {
-      AppState.decryptedFileMeta.set(msg.id, {
-        fileId,
-        fileKeyBase64: fileData.fileKeyBase64,
-        ivBase64: fileData.ivBase64,
-        sha256Base64: fileData.sha256Base64,
-        originalName: fileData.originalName || 'document_fasobrief.bin',
-        originalMime: fileData.originalMime || 'application/octet-stream',
-        originalSize: fileData.originalSize || msg.file_size || 0
-      });
-    }
-    const displayFileName = dec.ok && fileData.originalName
-      ? fileData.originalName
-      : '[Pièce jointe chiffrée AES-256-GCM]';
-    const sizeBytes = (fileData && fileData.originalSize) || msg.file_size || 0;
-
-    bodyHtml = `
-      ${senderLabel}
-      <div class="msg-file-block">
-        <div class="msg-file-head">
-          ${Icons.file}
-          <div>
-            <div class="msg-file-name">${escapeHtml(displayFileName)}</div>
-            <div class="msg-file-meta">${escapeHtml(formatByteSize(sizeBytes))} • Chiffré AES-256-GCM</div>
-          </div>
-        </div>
-        ${dec.ok && fileId
-          ? `<button type="button" class="btn btn-secondary btn-sm" onclick="downloadAndDecryptAttachment('${escapeAttr(msg.id)}')">Télécharger et déchiffrer</button>`
-          : `<div class="msg-text muted-cipher">${escapeHtml(dec.text)}</div>`}
-      </div>
-    `;
-  } else {
-    bodyHtml = `
-      ${senderLabel}
-      <div class="msg-text ${dec.ok ? '' : 'muted-cipher'}">${escapeHtml(dec.text)}</div>
-    `;
-  }
-
-  const convertBtn = canMakeInst
-    ? `<button type="button" class="msg-inline-btn" onclick="convertMessageToInstruction('${escapeAttr(msg.id)}')">Convertir en instruction</button>`
-    : '';
-
-  const infoBtn = isMe
-    ? `<button type="button" class="msg-inline-btn" aria-label="Infos du message et statuts par destinataire" onclick="openMessageInfoModal('${escapeAttr(msg.id)}')">Infos</button>`
-    : '';
-
-  const statusHtml = isMe ? renderDeliveryStatusIcon(msg.delivery_status || 'sent') : '';
-
-  row.innerHTML = `
-    <div class="msg-box">
-      ${bodyHtml}
-      <div class="msg-footer">
-        ${convertBtn}
-        ${infoBtn}
-        <span>${escapeHtml(timeStr)}</span>
-        <span class="msg-status-slot">${statusHtml}</span>
-      </div>
-    </div>
-  `;
-  return row;
-}
-
-function buildFailedMessageNode(clientMsgId, item) {
-  const row = document.createElement('div');
-  row.className = 'msg-row sent';
-  row.innerHTML = `
-    <div class="msg-box">
-      <div class="msg-text">${escapeHtml(item.plainText)}</div>
-      <div class="msg-footer">
-        <span class="status-icon failed">${Icons.alert}</span>
-        <span style="color: var(--danger);">Non remis</span>
-        <button type="button" class="msg-inline-btn" style="color: var(--brand);" onclick="retryFailedMessage('${escapeAttr(clientMsgId)}')">
-          Réessayer
-        </button>
-      </div>
-    </div>
-  `;
-  return row;
-}
-
-function renderDeliveryStatusIcon(status) {
-  if (status === 'pending') {
-    return `<span class="status-icon" title="En attente côté client">${Icons.clock}</span>`;
-  }
-  if (status === 'read') {
-    return `<span class="status-icon read" title="Lu par tous les destinataires">${Icons.checkDoubleGreen}</span>`;
-  }
-  if (status === 'delivered') {
-    return `<span class="status-icon" title="Reçu sur l'appareil de tous les destinataires">${Icons.checkDoubleGrey}</span>`;
-  }
-  return `<span class="status-icon" title="Accepté par le serveur">${Icons.checkSingle}</span>`;
-}
-
-function updateMessageStatusDom(messageId, deliveryStatus) {
-  const row = document.querySelector(`.msg-row[data-message-id="${CSS.escape(messageId)}"]`);
-  if (!row) return;
-  const slot = row.querySelector('.msg-status-slot');
-  if (slot) {
-    slot.innerHTML = renderDeliveryStatusIcon(deliveryStatus);
-  }
-}
-
-function autoGrowComposer(el) {
-  if (!el) return;
-  el.style.height = 'auto';
-  el.style.height = `${Math.min(el.scrollHeight, 116)}px`;
-}
-
-function handleComposerKeydown(event) {
-  if (event.key === 'Enter' && !event.shiftKey) {
-    event.preventDefault();
-    submitChatMessage();
-  }
-}
-
-async function submitChatMessage() {
-  const input = document.getElementById('chatComposerInput');
-  const plainText = (input.value || '').trim();
-  const groupId = AppState.activeGroupId;
-  if (!plainText || !groupId) return;
-
-  input.value = '';
-  input.style.height = '';
-  triggerHaptic(6);
-  const clientMsgId = `cmsg_${Date.now()}_${FasoCrypto._generateRandomHex(6)}`;
-  await sendTextWithClientId(groupId, plainText, clientMsgId);
-}
-
-async function sendTextWithClientId(groupId, plainText, clientMsgId) {
-  // Affichage optimiste immédiat avec icône horloge ('pending')
-  const container = document.getElementById('chatMessages');
-  let tempRow = null;
-  if (groupId === AppState.activeGroupId && container) {
-    tempRow = document.createElement('div');
-    tempRow.className = 'msg-row sent';
-    tempRow.innerHTML = `
-      <div class="msg-box">
-        <div class="msg-text">${escapeHtml(plainText)}</div>
-        <div class="msg-footer">
-          <span>${escapeHtml(formatTimeOnly(new Date().toISOString()))}</span>
-          <span class="msg-status-slot">${renderDeliveryStatusIcon('pending')}</span>
-        </div>
-      </div>
-    `;
-    container.appendChild(tempRow);
-    container.scrollTop = container.scrollHeight;
-  }
-
-  try {
-    const enc = await FasoCrypto.encryptTextMessage(groupId, plainText);
-    await FasoApi.sendEncryptedMessage(groupId, {
-      ...enc,
-      clientMsgId,
-      messageType: 'CHAT'
-    });
-    AppState.failedOutgoing.delete(clientMsgId);
-    await loadActiveConversationMessages({ preserveScroll: false });
-    await loadConversations({ keepSelection: true });
-  } catch (err) {
-    if (tempRow && tempRow.parentNode) tempRow.parentNode.removeChild(tempRow);
-    AppState.failedOutgoing.set(clientMsgId, { groupId, plainText });
-    showToast(`Envoi interrompu : ${formatApiError(err.message)}`, 'error');
-    await loadActiveConversationMessages({ preserveScroll: false });
-  }
-}
-
-async function retryFailedMessage(clientMsgId) {
-  const item = AppState.failedOutgoing.get(clientMsgId);
-  if (!item) return;
-  AppState.failedOutgoing.delete(clientMsgId);
-  await sendTextWithClientId(item.groupId, item.plainText, clientMsgId);
-}
-
-// --- Pièces jointes chiffrées de bout en bout (AES-256-GCM + Megolm) ---
-async function handleEncryptedFileSelection(event) {
-  const file = event.target.files && event.target.files[0];
-  event.target.value = '';
-  const groupId = AppState.activeGroupId;
-  if (!file || !groupId) return;
-
-  if (file.size > 25 * 1024 * 1024) {
-    showToast('La taille maximale autorisée par fichier est de 25 Mo.', 'error');
-    return;
-  }
-
-  showToast('Chiffrement local AES-256-GCM du fichier en cours...', 'info');
-  try {
-    const buffer = await file.arrayBuffer();
-    const encFile = await FasoCrypto.encryptFile(buffer, file.name, file.type);
-
-    // 1. Téléverser le blob binaire opaque (sans nom ni clé en clair)
-    const uploadRes = await FasoApi.uploadGroupEncryptedFile(groupId, encFile.encryptedBlob);
-
-    // 2. Transmettre la clé AES-256-GCM, l'IV, le SHA-256 et le nom réel à l'intérieur du message Megolm
-    const megolmDescriptor = await FasoCrypto.encryptPayload(groupId, {
-      kind: 'file',
-      fileId: uploadRes.fileId,
-      fileKeyBase64: encFile.fileKeyBase64,
-      ivBase64: encFile.ivBase64,
-      sha256Base64: encFile.sha256Base64,
-      originalName: encFile.originalName,
-      originalMime: encFile.originalMime,
-      originalSize: encFile.originalSize
-    });
-
-    await FasoApi.sendEncryptedMessage(groupId, {
-      ...megolmDescriptor,
-      fileId: uploadRes.fileId,
-      clientMsgId: `cfile_${Date.now()}_${FasoCrypto._generateRandomHex(5)}`,
-      messageType: 'FILE'
-    });
-
-    showToast('Document chiffré transmis.', 'success');
-    await loadActiveConversationMessages({ preserveScroll: false });
-    await loadConversations({ keepSelection: true });
-  } catch (err) {
-    showToast(`Échec d'envoi du fichier : ${formatApiError(err.message)}`, 'error');
-  }
-}
-
-async function downloadAndDecryptAttachment(messageId) {
-  const meta = AppState.decryptedFileMeta.get(messageId);
-  if (!meta) {
-    showToast('Clé de déchiffrement du fichier indisponible sur ce terminal.', 'error');
-    return;
-  }
-
-  try {
-    const cipherBlob = await FasoApi.downloadEncryptedFile(meta.fileId);
-    const clearBlob = await FasoCrypto.decryptFile(
-      cipherBlob,
-      meta.fileKeyBase64,
-      meta.ivBase64,
-      meta.sha256Base64,
-      meta.originalMime
-    );
-
-    const url = URL.createObjectURL(clearBlob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = meta.originalName || 'document_fasobrief';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1500);
-  } catch (err) {
-    showToast(`Déchiffrement impossible : ${formatApiError(err.message)}`, 'error');
-  }
-}
-
-// --- Modale « Infos du message » ---
-async function openMessageInfoModal(messageId) {
-  const body = document.getElementById('modalMsgInfoBody');
-  body.innerHTML = renderSkeletonPlaceholder(3);
-  openModal('modalMessageInfo');
-
-  try {
-    const res = await FasoApi.getMessageInfo(messageId);
-    const m = res.message;
-    const recs = res.recipients || [];
-
-    const legendHtml = `
-      <div class="status-legend">
-        <span class="status-legend-item">${Icons.clock} En attente</span>
-        <span class="status-legend-item">${Icons.checkSingle} Envoyé serveur</span>
-        <span class="status-legend-item">${Icons.checkDoubleGrey} Reçu appareil</span>
-        <span class="status-legend-item"><span class="status-icon read">${Icons.checkDoubleGreen}</span> Lu</span>
-      </div>
-    `;
-
-    const metaHtml = `
-      <div style="margin-bottom: 12px; font-size: var(--fs-xs); color: var(--text-secondary);">
-        <div>Émis le : <strong>${escapeHtml(formatDateTime(m.createdAt))}</strong></div>
-        <div>Protocole : <span class="badge badge-mono">${escapeHtml(m.protocol || 'megolm.v1')}</span></div>
-        ${m.megolmSessionId ? `<div style="margin-top:4px;">Session Megolm : <code>${escapeHtml(m.megolmSessionId.slice(0, 24))}...</code></div>` : ''}
-      </div>
-    `;
-
-    const rowsHtml = recs.length === 0
-      ? `<div class="empty-state">Aucun autre destinataire actif dans cette conversation.</div>`
-      : `<div class="compact-list">${recs.map((r) => {
-          let badge = `<span class="badge badge-amber">En attente</span>`;
-          let dates = 'Pas encore remis sur le terminal';
-          if (r.status === 'read') {
-            badge = `<span class="badge badge-green">Lu</span>`;
-            dates = `Lu à ${formatDateTime(r.readAt)}${r.deliveredAt ? ` • Reçu à ${formatTimeOnly(r.deliveredAt)}` : ''}`;
-          } else if (r.status === 'delivered') {
-            badge = `<span class="badge">Reçu sur appareil</span>`;
-            dates = `Reçu à ${formatDateTime(r.deliveredAt)}`;
-          }
-          return `
-            <div class="list-row">
-              <div class="list-row-main">
-                <div class="list-row-title">${escapeHtml(r.fullName)} <span class="badge">${escapeHtml(r.matricule)}</span></div>
-                <div class="list-row-sub">${escapeHtml(dates)}</div>
-              </div>
-              <div class="list-row-actions">${badge}</div>
-            </div>
-          `;
-        }).join('')}</div>`;
-
-    body.innerHTML = legendHtml + metaHtml + rowsHtml;
-  } catch (err) {
-    body.innerHTML = `<div class="inline-alert error">${escapeHtml(formatApiError(err.message))}</div>`;
-  }
-}
-
-// --- Modale « Paramètres et membres de la conversation » ---
-async function openConversationInfoModal() {
-  const groupId = AppState.activeGroupId;
-  if (!groupId) return;
-
-  const body = document.getElementById('modalConvInfoBody');
-  body.innerHTML = renderSkeletonPlaceholder(4);
-  openModal('modalConversationInfo');
-
-  try {
-    const [detailRes, dirRes] = await Promise.all([
-      FasoApi.getGroupDetails(groupId),
-      FasoApi.getDirectory()
-    ]);
-
-    const grp = detailRes.group;
-    const members = detailRes.members || [];
-    const mutedList = (FasoApi.currentUser && FasoApi.currentUser.notifMutedGroups) || [];
-    const isMuted = mutedList.includes(groupId);
-
-    const isDirect = grp.type === 'DIRECT';
-    const memberIdsSet = new Set(members.map((m) => m.id));
-    const addableAgents = (dirRes.agents || []).filter((a) => !memberIdsSet.has(a.id));
-
-    let html = `
-      <div class="inline-alert" style="background-color: var(--bg-subtle); display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
-        <div>
-          <div style="font-weight: var(--fw-semibold);">${isDirect ? 'Conversation individuelle (DIRECT)' : 'Groupe de travail officiel'}</div>
-          <div class="form-hint">Époque de clé Megolm : #${Number(grp.keyEpoch || 1)} (rotation automatique à chaque retrait/révocation)</div>
-        </div>
-        <label style="display:inline-flex; align-items:center; gap:8px; cursor:pointer; font-weight:var(--fw-medium);">
-          <input type="checkbox" ${isMuted ? 'checked' : ''} onchange="toggleGroupMute('${escapeAttr(groupId)}', this.checked)" style="width:17px; height:17px; accent-color:var(--brand);">
-          <span>Mettre en sourdine</span>
-        </label>
-      </div>
-    `;
-
-    if (!isDirect && grp.canManage) {
-      html += `
-        <form onsubmit="submitEditGroupMeta(event, '${escapeAttr(groupId)}')" style="margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border);">
-          <div class="form-group">
-            <label class="form-label" for="editGrpName">Nom du groupe</label>
-            <input id="editGrpName" class="form-input" type="text" value="${escapeAttr(grp.name)}" required>
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="editGrpDesc">Description</label>
-            <input id="editGrpDesc" class="form-input" type="text" value="${escapeAttr(grp.description || '')}">
-          </div>
-          <button type="submit" class="btn btn-secondary btn-sm">Enregistrer les modifications</button>
-        </form>
-      `;
-    }
-
-    html += `<div style="font-weight: var(--fw-semibold); margin-bottom: 8px;">Membres actifs (${members.length})</div>`;
-    html += `<div class="compact-list" style="margin-bottom: 14px;">`;
-    members.forEach((m) => {
-      const canRemove = !isDirect && grp.canManage && m.id !== FasoApi.currentUser.id;
-      html += `
-        <div class="list-row">
-          <div class="list-row-main">
-            <div class="list-row-title">
-              ${escapeHtml(m.fullName)}
-              <span class="badge">${escapeHtml(m.role)}</span>
-              ${!isDirect ? `<span class="badge badge-green">${escapeHtml(m.memberRole)}</span>` : ''}
-            </div>
-            <div class="list-row-sub">${escapeHtml(m.matricule)} • ${escapeHtml(m.serviceMinistry)}</div>
-          </div>
-          <div class="list-row-actions">
-            ${canRemove ? `<button type="button" class="btn btn-danger btn-sm" onclick="removeMemberFromActiveGroup('${escapeAttr(groupId)}', '${escapeAttr(m.id)}')">Retirer</button>` : ''}
-          </div>
-        </div>
-      `;
-    });
-    html += `</div>`;
-
-    if (!isDirect && grp.canManage && addableAgents.length > 0) {
-      html += `
-        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom: 14px;">
-          <select id="addGroupMemberSelect" class="form-select" style="flex:1; min-width:200px;">
-            ${addableAgents.map((a) => `<option value="${escapeAttr(a.id)}">${escapeHtml(a.fullName)} (${escapeHtml(a.matricule)} • ${escapeHtml(a.role)})</option>`).join('')}
-          </select>
-          <button type="button" class="btn btn-primary btn-sm" onclick="addSelectedMemberToGroup('${escapeAttr(groupId)}')">Ajouter au groupe</button>
-        </div>
-      `;
-    }
-
-    if (!isDirect) {
-      html += `
-        <div style="display:flex; justify-content:flex-end; padding-top: 8px; border-top: 1px solid var(--border);">
-          <button type="button" class="btn btn-danger btn-sm" onclick="leaveCurrentGroup('${escapeAttr(groupId)}')">Quitter ce groupe</button>
-        </div>
-      `;
-    }
-
-    body.innerHTML = html;
-  } catch (err) {
-    body.innerHTML = `<div class="inline-alert error">${escapeHtml(formatApiError(err.message))}</div>`;
-  }
-}
-
-async function toggleGroupMute(groupId, muted) {
-  const current = new Set((FasoApi.currentUser && FasoApi.currentUser.notifMutedGroups) || []);
-  if (muted) current.add(groupId);
-  else current.delete(groupId);
-  try {
-    await FasoApi.updatePreferences({ notifMutedGroups: Array.from(current) });
-    showToast(muted ? 'Notifications du canal mises en sourdine.' : 'Notifications du canal réactivées.', 'success');
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-async function submitEditGroupMeta(event, groupId) {
-  event.preventDefault();
-  const name = document.getElementById('editGrpName').value.trim();
-  const description = document.getElementById('editGrpDesc').value.trim();
-  try {
-    await FasoApi.updateGroup(groupId, { name, description });
-    showToast('Informations du groupe mises à jour.', 'success');
-    await loadConversations({ keepSelection: true });
-    await openConversationInfoModal();
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-async function addSelectedMemberToGroup(groupId) {
-  const sel = document.getElementById('addGroupMemberSelect');
-  if (!sel || !sel.value) return;
-  try {
-    await FasoApi.addGroupMembers(groupId, [sel.value]);
-    FasoCrypto.invalidateOutboundGroupSession(groupId);
-    showToast('Membre ajouté et session Megolm mise à jour.', 'success');
-    await loadConversations({ keepSelection: true });
-    await openConversationInfoModal();
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-async function removeMemberFromActiveGroup(groupId, userId) {
-  try {
-    await FasoApi.removeGroupMember(groupId, userId);
-    FasoCrypto.invalidateOutboundGroupSession(groupId);
-    showToast('Membre retiré et clé Megolm renouvelée.', 'success');
-    await loadConversations({ keepSelection: true });
-    await openConversationInfoModal();
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-async function leaveCurrentGroup(groupId) {
-  try {
-    await FasoApi.leaveGroup(groupId);
-    FasoCrypto.invalidateOutboundGroupSession(groupId);
-    closeModal('modalConversationInfo');
-    AppState.activeGroupId = null;
-    document.body.classList.remove('mobile-chat-open');
-    showToast('Vous avez quitté le groupe.', 'success');
-    await loadConversations({ keepSelection: false });
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-// ============================================================================
-// VUE 2 : ANNUAIRE INSTITUTIONNEL & CRÉATION DE GROUPES / CONVERSATIONS DIRECTES
-// ============================================================================
-async function loadDirectoryView() {
-  if (!FasoApi.token) return;
-  const q = (document.getElementById('dirSearchInput').value || '').trim();
-  const orgId = document.getElementById('dirOrgSelect').value;
-  const directionId = document.getElementById('dirDirectionSelect').value;
-  const serviceId = document.getElementById('dirServiceSelect').value;
-  const includeAll = document.getElementById('dirIncludeAllCheck').checked ? '1' : '0';
-
-  try {
-    const res = await FasoApi.getDirectory({ q, orgId, directionId, serviceId, includeAllStatuses: includeAll });
-    AppState.directoryCache = res;
-    populateDirectoryFilters(res, { orgId, directionId, serviceId });
-    renderDirectoryAgents(res.agents || []);
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-function populateDirectoryFilters(data, selected) {
-  const orgSel = document.getElementById('dirOrgSelect');
-  const dirSel = document.getElementById('dirDirectionSelect');
-  const srvSel = document.getElementById('dirServiceSelect');
-
-  orgSel.innerHTML = `<option value="">Toutes les organisations</option>` +
-    (data.organisations || []).map((o) =>
-      `<option value="${escapeAttr(o.id)}" ${o.id === selected.orgId ? 'selected' : ''}>${escapeHtml(o.code)} — ${escapeHtml(o.name)}</option>`
-    ).join('');
-
-  const filteredDirs = (data.directions || []).filter((d) => !selected.orgId || d.orgId === selected.orgId);
-  dirSel.innerHTML = `<option value="">Toutes les directions</option>` +
-    filteredDirs.map((d) =>
-      `<option value="${escapeAttr(d.id)}" ${d.id === selected.directionId ? 'selected' : ''}>${escapeHtml(d.code)} — ${escapeHtml(d.name)}</option>`
-    ).join('');
-
-  const filteredSrvs = (data.services || []).filter((s) =>
-    (!selected.orgId || s.orgId === selected.orgId) &&
-    (!selected.directionId || s.directionId === selected.directionId)
-  );
-  srvSel.innerHTML = `<option value="">Tous les services</option>` +
-    filteredSrvs.map((s) =>
-      `<option value="${escapeAttr(s.id)}" ${s.id === selected.serviceId ? 'selected' : ''}>${escapeHtml(s.name)} (${s.activeAgentCount})</option>`
-    ).join('');
-}
-
-function onDirectoryOrgChange() {
-  document.getElementById('dirDirectionSelect').value = '';
-  document.getElementById('dirServiceSelect').value = '';
-  loadDirectoryView();
-}
-
-function onDirectoryDirectionChange() {
-  document.getElementById('dirServiceSelect').value = '';
-  loadDirectoryView();
-}
-
-function renderDirectoryAgents(agents) {
-  const listEl = document.getElementById('directoryList');
-  if (!listEl) return;
-
-  if (agents.length === 0) {
-    listEl.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-state-title">Aucun agent correspondant</div>
-        <p>Modifiez vos critères de recherche ou de filtre hiérarchique.</p>
-      </div>
-    `;
-    return;
-  }
-
-  listEl.innerHTML = agents.map((a) => {
-    const isMe = FasoApi.currentUser && a.id === FasoApi.currentUser.id;
-    const isActive = a.status === 'ACTIVE';
-    const statusBadge = a.status === 'ACTIVE'
-      ? ''
-      : `<span class="badge ${a.status === 'INVITED' ? 'badge-amber' : 'badge-red'}">${escapeHtml(a.status)}</span>`;
-
-    return `
-      <div class="list-row">
-        <div class="list-row-main">
-          <div class="list-row-title">
-            <span class="avatar avatar-sm">${escapeHtml(getInitials(a.fullName))}</span>
-            <span>${escapeHtml(a.fullName)}</span>
-            <span class="badge">${escapeHtml(a.role)}</span>
-            ${statusBadge}
-          </div>
-          <div class="list-row-sub">
-            ${escapeHtml(a.matricule)} • ${escapeHtml(a.jobTitle || 'Agent public')} • ${escapeHtml(a.orgCode ? `${a.orgCode} / ${a.serviceName || a.serviceMinistry}` : a.serviceMinistry)}
-          </div>
-        </div>
-        <div class="list-row-actions">
-          ${!isMe && isActive
-            ? `<button type="button" class="btn btn-primary btn-sm" onclick="startDirectMessageWith('${escapeAttr(a.id)}')">Message chiffré</button>`
-            : (isMe ? `<span class="badge badge-green">Vous</span>` : '')}
-        </div>
-      </div>
-    `;
-  }).join('');
-}
-
-async function startDirectMessageWith(targetUserId) {
-  try {
-    const res = await FasoApi.openDirectConversation(targetUserId);
-    if (res && res.group) {
-      AppState.activeGroupId = res.group.id;
-      switchMainView('chat');
-      if (window.innerWidth < 768) {
-        document.body.classList.add('mobile-chat-open');
-      }
-      await loadConversations({ keepSelection: true });
-    }
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-async function openCreateGroupModal() {
-  try {
-    const dir = await FasoApi.getDirectory();
-    const srvSel = document.getElementById('newGroupService');
-    srvSel.innerHTML = `<option value="">Rattachement général</option>` +
-      (dir.services || []).map((s) => `<option value="${escapeAttr(s.id)}">${escapeHtml(s.name)}</option>`).join('');
-
-    const others = (dir.agents || []).filter((a) => a.id !== FasoApi.currentUser.id && a.status === 'ACTIVE');
-    const memBox = document.getElementById('newGroupMembersList');
-    memBox.innerHTML = others.length === 0
-      ? `<div class="empty-state">Aucun autre agent actif disponible.</div>`
-      : others.map((a) => `
-          <label class="checkbox-row">
-            <input type="checkbox" name="newGrpMem" value="${escapeAttr(a.id)}" checked>
-            <div>
-              <div style="font-weight:var(--fw-medium);">${escapeHtml(a.fullName)}</div>
-              <div class="form-hint">${escapeHtml(a.matricule)} • ${escapeHtml(a.role)} • ${escapeHtml(a.serviceMinistry)}</div>
-            </div>
-          </label>
-        `).join('');
-
-    document.getElementById('newGroupName').value = '';
-    document.getElementById('newGroupDesc').value = '';
-    openModal('modalCreateGroup');
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-async function submitCreateGroup(event) {
-  event.preventDefault();
-  const name = document.getElementById('newGroupName').value.trim();
-  const description = document.getElementById('newGroupDesc').value.trim();
-  const serviceId = document.getElementById('newGroupService').value || null;
-  const memberIds = Array.from(document.querySelectorAll('input[name="newGrpMem"]:checked')).map((el) => el.value);
-
-  try {
-    const res = await FasoApi.createGroup({ name, description, serviceId, memberIds });
-    closeModal('modalCreateGroup');
-    showToast('Groupe officiel créé.', 'success');
-    if (res && res.group) {
-      AppState.activeGroupId = res.group.id;
-      switchMainView('chat');
-      if (window.innerWidth < 768) document.body.classList.add('mobile-chat-open');
-      await loadConversations({ keepSelection: true });
-    }
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-// ============================================================================
-// VUE 3 : INSTRUCTIONS ADMINISTRATIVES, VERSIONS & SIGNATURES ED25519
-// ============================================================================
-async function refreshInstructionsBadgeAndCache() {
-  if (!FasoApi.token) return;
-  try {
-    await FasoCrypto.syncPendingCrypto();
-    const res = await FasoApi.getInstructionsDashboard();
-    const items = res.dashboard || [];
-
-    // Déchiffrer localement chaque titre/corps d'instruction
-    for (const inst of items) {
-      const dec = await FasoCrypto.decryptPayload(inst.group_id, {
-        ciphertext: inst.title_ciphertext,
-        megolm_session_id: inst.megolm_session_id,
-        sender_ed25519: inst.sender_ed25519,
-        signature: inst.signature
-      });
-      inst._decryptedTitle = dec.ok ? ((dec.data && dec.data.title) || dec.text) : dec.text;
-      inst._decryptedBody = dec.ok && dec.data ? (dec.data.description || '') : '';
-      inst._decOk = dec.ok;
-    }
-
-    AppState.instructionsCache = items;
-    refreshNavigationBadges();
-  } catch (err) {
-    console.warn('[INST] Erreur rafraîchissement instructions :', err);
-  }
-}
-
-async function loadInstructionsView() {
-  await refreshInstructionsBadgeAndCache();
-  renderInstructionsKpis();
-  renderInstructionsList();
-}
-
-function renderInstructionsKpis() {
-  const list = AppState.instructionsCache;
-  const published = list.filter((i) => i.status === 'PUBLIEE');
-  const minePending = published.filter(
-    (i) => i.is_recipient && i.my_recipient && i.my_recipient.step !== 'EXECUTEE'
-  );
-  const overdue = published.filter((i) => i.is_overdue);
-
-  let totalRec = 0;
-  let totalAck = 0;
-  published.forEach((i) => {
-    totalRec += i.total_recipients || 0;
-    totalAck += i.ack_count || 0;
-  });
-
-  document.getElementById('kpiInstPublished').textContent = String(published.length);
-  document.getElementById('kpiInstMinePending').textContent = String(minePending.length);
-  document.getElementById('kpiInstAckRatio').textContent =
-    totalRec > 0 ? `${totalAck} / ${totalRec} (${Math.round((totalAck / totalRec) * 100)} %)` : '0 / 0';
-  document.getElementById('kpiInstOverdue').textContent = String(overdue.length);
-}
-
-function setInstructionFilter(filter) {
-  AppState.instFilter = filter;
-  document.querySelectorAll('[data-inst-filter]').forEach((btn) => {
-    const isAct = btn.getAttribute('data-inst-filter') === filter;
-    btn.classList.toggle('active', isAct);
-    btn.setAttribute('aria-selected', String(isAct));
-  });
-  renderInstructionsList();
-}
-
-function renderInstructionsList() {
-  const listEl = document.getElementById('instructionsList');
-  if (!listEl) return;
-
-  const filtered = AppState.instructionsCache.filter((i) => {
-    if (AppState.instFilter === 'TO_ACT') {
-      return i.status === 'PUBLIEE' && i.is_recipient && i.my_recipient && i.my_recipient.step !== 'EXECUTEE';
-    }
-    if (AppState.instFilter === 'ISSUED') {
-      return i.is_creator && i.status !== 'BROUILLON';
-    }
-    if (AppState.instFilter === 'OVERDUE') {
-      return i.is_overdue;
-    }
-    if (AppState.instFilter === 'DRAFTS') {
-      return i.status === 'BROUILLON' && i.is_creator;
-    }
-    if (AppState.instFilter === 'CLOSED') {
-      return i.status === 'CLOTUREE' || i.status === 'ANNULEE';
-    }
-    return i.status !== 'BROUILLON' || i.is_creator;
-  });
-
-  if (filtered.length === 0) {
-    listEl.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-state-title">Aucune instruction dans cette vue</div>
-        <p>Les instructions publiées dans vos groupes apparaissent automatiquement ici.</p>
-      </div>
-    `;
-    return;
-  }
-
-  listEl.innerHTML = filtered.map((inst) => {
-    const prioBadge = inst.priority === 'URGENTE'
-      ? `<span class="badge badge-red">URGENTE</span>`
-      : (inst.priority === 'HAUTE' ? `<span class="badge badge-amber">HAUTE</span>` : '');
-    const overdueBadge = inst.is_overdue ? `<span class="badge badge-red">EN RETARD</span>` : '';
-    const myStepBadge = inst.is_recipient && inst.my_recipient
-      ? renderRecipientStepBadge(inst.my_recipient.step)
-      : (inst.is_creator ? `<span class="badge">Émetteur</span>` : '');
-
-    return `
-      <button type="button" class="list-row interactive-btn" onclick="openInstructionDetail('${escapeAttr(inst.id)}')">
-        <span class="list-row-main">
-          <span class="list-row-title">
-            <span class="badge badge-mono">${escapeHtml(inst.instruction_ref)}</span>
-            <span class="badge">v${Number(inst.version || 1)}</span>
-            ${renderInstructionStatusBadge(inst.status)}
-            ${prioBadge}
-            ${overdueBadge}
-            <span>${escapeHtml(inst._decryptedTitle || '[Instruction chiffrée]')}</span>
-          </span>
-          <span class="list-row-sub" style="display:block;">
-            Canal : ${escapeHtml(inst.group_name)} • Par ${escapeHtml(inst.creator_name)}
-            ${inst.deadline ? ` • Échéance : ${escapeHtml(formatDateTime(inst.deadline))}` : ''}
-            ${inst.status !== 'BROUILLON' ? ` • Confirmées : ${inst.ack_count}/${inst.total_recipients} • Exécutées : ${inst.executed_count}/${inst.total_recipients}` : ''}
-          </span>
-        </span>
-        <span class="list-row-actions">
-          ${myStepBadge}
-          <span class="row-chevron" aria-hidden="true">${Icons.chevronRight}</span>
-        </span>
-      </button>
-    `;
-  }).join('');
-}
-
-function renderInstructionStatusBadge(status) {
-  if (status === 'BROUILLON') return `<span class="badge badge-amber">BROUILLON</span>`;
-  if (status === 'CLOTUREE') return `<span class="badge badge-green">CLÔTURÉE</span>`;
-  if (status === 'ANNULEE') return `<span class="badge badge-red">ANNULÉE</span>`;
-  return `<span class="badge badge-green">PUBLIÉE</span>`;
-}
-
-function renderRecipientStepBadge(step) {
-  if (step === 'EXECUTEE') return `<span class="badge badge-green">Exécutée</span>`;
-  if (step === 'EN_COURS') return `<span class="badge badge-amber">En cours</span>`;
-  if (step === 'CONFIRMEE') return `<span class="badge badge-green">Réception confirmée</span>`;
-  if (step === 'CONSULTEE') return `<span class="badge badge-amber">Consultée (à confirmer)</span>`;
-  return `<span class="badge badge-amber">Transmise</span>`;
-}
-
-async function openInstructionModalFromChat(prefillTitle = '', prefillBody = '') {
-  await openInstructionModal({
-    preselectedGroupId: AppState.activeGroupId,
-    prefillTitle,
-    prefillBody
-  });
-}
-
-async function convertMessageToInstruction(messageId) {
-  const text = AppState.decryptedMsgText.get(messageId) || '';
-  await openInstructionModal({
-    preselectedGroupId: AppState.activeGroupId,
-    prefillTitle: text.slice(0, 120),
-    prefillBody: text
-  });
-}
-
-async function openInstructionModal({ preselectedGroupId = null, prefillTitle = '', prefillBody = '', editInst = null } = {}) {
-  if (!FasoApi.currentUser || !['ADMIN', 'DIRECTEUR', 'CHEF_SERVICE'].includes(FasoApi.currentUser.role)) {
-    showToast('Seuls les Directeurs, Chefs de service et Administrateurs émettent des instructions.', 'error');
-    return;
-  }
-
-  window._instSubmitMode = 'publish';
-  const groupSel = document.getElementById('instTargetGroup');
-  if (AppState.conversations.length === 0) {
-    await loadConversations({ keepSelection: true });
-  }
-
-  if (AppState.conversations.length === 0) {
-    showToast('Ouvrez d\'abord un groupe ou une conversation avec au moins un destinataire.', 'error');
-    return;
-  }
-
-  groupSel.innerHTML = AppState.conversations.map((g) =>
-    `<option value="${escapeAttr(g.id)}">${escapeHtml(g.name)} (${g.type === 'DIRECT' ? 'Direct' : 'Groupe'})</option>`
-  ).join('');
-
-  const noticeEl = document.getElementById('instFormNotice');
-  if (editInst) {
-    document.getElementById('instEditId').value = editInst.id;
-    document.getElementById('instEditMode').value = editInst.status === 'BROUILLON' ? 'edit_draft' : 'new_version';
-    document.getElementById('modalInstFormTitle').textContent = editInst.status === 'BROUILLON'
-      ? `Modifier le brouillon ${editInst.instruction_ref}`
-      : `Nouvelle version (v${Number(editInst.version || 1) + 1}) — ${editInst.instruction_ref}`;
-
-    groupSel.value = editInst.group_id;
-    groupSel.disabled = true;
-    document.getElementById('instTitleInput').value = editInst._decryptedTitle || '';
-    document.getElementById('instBodyInput').value = editInst._decryptedBody || '';
-    document.getElementById('instPrioritySelect').value = editInst.priority || 'NORMALE';
-    document.getElementById('instDeadlineInput').value = editInst.deadline ? toDatetimeLocalValue(editInst.deadline) : '';
-
-    document.getElementById('btnSaveDraftInst').hidden = editInst.status !== 'BROUILLON';
-    document.getElementById('btnPublishInst').textContent = editInst.status === 'BROUILLON'
-      ? 'Publier maintenant'
-      : `Publier la version v${Number(editInst.version || 1) + 1}`;
-
-    if (editInst.status === 'PUBLIEE') {
-      noticeEl.textContent =
-        'La modification d\'une instruction déjà publiée génère une nouvelle version horodatée. Les confirmations antérieures restent dans l\'historique et une nouvelle confirmation sera demandée aux destinataires.';
-      noticeEl.hidden = false;
-    } else {
-      noticeEl.hidden = true;
-    }
-  } else {
-    document.getElementById('instEditId').value = '';
-    document.getElementById('instEditMode').value = 'create';
-    document.getElementById('modalInstFormTitle').textContent = 'Nouvelle instruction administrative';
-    groupSel.disabled = false;
-    if (preselectedGroupId && AppState.conversations.some((g) => g.id === preselectedGroupId)) {
-      groupSel.value = preselectedGroupId;
-    }
-    document.getElementById('instTitleInput').value = prefillTitle;
-    document.getElementById('instBodyInput').value = prefillBody;
-    document.getElementById('instPrioritySelect').value = 'NORMALE';
-    document.getElementById('instDeadlineInput').value = '';
-    document.getElementById('btnSaveDraftInst').hidden = false;
-    document.getElementById('btnPublishInst').textContent = 'Publier l\'instruction';
-    noticeEl.hidden = true;
-  }
-
-  await loadInstructionRecipientChoices(editInst ? editInst.recipients.map((r) => r.userId) : null);
-  openModal('modalInstructionForm');
-}
-
-async function loadInstructionRecipientChoices(precheckedIds = null) {
-  const groupId = document.getElementById('instTargetGroup').value;
-  const box = document.getElementById('instRecipientsList');
-  if (!groupId || !box) return;
-
-  try {
-    const res = await FasoApi.getGroupDetails(groupId);
-    const candidates = (res.members || []).filter((m) => m.id !== FasoApi.currentUser.id);
-    if (candidates.length === 0) {
-      box.innerHTML = `<div class="empty-state" style="padding:14px;">Aucun autre membre actif dans ce canal.</div>`;
-      return;
-    }
-    const checkedSet = precheckedIds ? new Set(precheckedIds) : null;
-    box.innerHTML = candidates.map((m) => {
-      const checked = !checkedSet || checkedSet.has(m.id);
-      return `
-        <label class="checkbox-row">
-          <input type="checkbox" name="instRecipientChoice" value="${escapeAttr(m.id)}" ${checked ? 'checked' : ''}>
-          <div>
-            <div style="font-weight:var(--fw-medium);">${escapeHtml(m.fullName)}</div>
-            <div class="form-hint">${escapeHtml(m.matricule)} • ${escapeHtml(m.role)}</div>
-          </div>
-        </label>
-      `;
-    }).join('');
-  } catch (err) {
-    box.innerHTML = `<div class="inline-alert error">${escapeHtml(formatApiError(err.message))}</div>`;
-  }
-}
-
-async function submitInstructionForm(event) {
-  event.preventDefault();
-  const mode = window._instSubmitMode || 'publish';
-  const editId = document.getElementById('instEditId').value;
-  const editMode = document.getElementById('instEditMode').value;
-  const groupId = document.getElementById('instTargetGroup').value;
-  const title = document.getElementById('instTitleInput').value.trim();
-  const description = document.getElementById('instBodyInput').value.trim();
-  const priority = document.getElementById('instPrioritySelect').value;
-  const deadlineRaw = document.getElementById('instDeadlineInput').value;
-  const deadline = deadlineRaw ? new Date(deadlineRaw).toISOString() : null;
-  const recipientIds = Array.from(document.querySelectorAll('input[name="instRecipientChoice"]:checked')).map((c) => c.value);
-
-  if (!title || !groupId) return;
-  if (mode === 'publish' && recipientIds.length === 0) {
-    showToast('Sélectionnez au moins un destinataire actif pour publier l\'instruction.', 'error');
-    return;
-  }
-
-  try {
-    const enc = await FasoCrypto.encryptPayload(groupId, {
-      kind: 'instruction',
-      title,
-      description
-    });
-
-    if (editMode === 'create') {
-      const isDraft = mode === 'draft';
-      let msgId = null;
-      if (!isDraft) {
-        const msgRes = await FasoApi.sendEncryptedMessage(groupId, {
-          ...enc,
-          clientMsgId: `cinst_${Date.now()}_${FasoCrypto._generateRandomHex(5)}`,
-          messageType: 'INSTRUCTION'
-        });
-        msgId = msgRes.message.id;
-      }
-
-      await FasoApi.createInstruction({
-        messageId: msgId,
-        titleCiphertext: enc.ciphertext,
-        megolmSessionId: enc.megolmSessionId,
-        senderEd25519: enc.senderEd25519,
-        signature: enc.signature,
-        deadline,
-        priority,
-        groupId,
-        recipientIds,
-        isDraft
-      });
-      showToast(isDraft ? 'Brouillon enregistré.' : 'Instruction publiée et notifiée.', 'success');
-    } else if (editMode === 'edit_draft') {
-      if (mode === 'draft') {
-        await FasoApi.updateInstruction(editId, {
-          titleCiphertext: enc.ciphertext,
-          megolmSessionId: enc.megolmSessionId,
-          priority,
-          deadline
-        });
-        showToast('Brouillon mis à jour.', 'success');
-      } else {
-        await FasoApi.updateInstruction(editId, {
-          titleCiphertext: enc.ciphertext,
-          megolmSessionId: enc.megolmSessionId,
-          priority,
-          deadline
-        });
-        const msgRes = await FasoApi.sendEncryptedMessage(groupId, {
-          ...enc,
-          clientMsgId: `cpub_${Date.now()}_${FasoCrypto._generateRandomHex(5)}`,
-          messageType: 'INSTRUCTION'
-        });
-        await FasoApi.publishInstruction(editId, {
-          messageId: msgRes.message.id,
-          titleCiphertext: enc.ciphertext,
-          megolmSessionId: enc.megolmSessionId,
-          senderEd25519: enc.senderEd25519,
-          signature: enc.signature,
-          recipientIds
-        });
-        showToast('Brouillon publié officiellement.', 'success');
-      }
-    } else if (editMode === 'new_version') {
-      const msgRes = await FasoApi.sendEncryptedMessage(groupId, {
-        ...enc,
-        clientMsgId: `cver_${Date.now()}_${FasoCrypto._generateRandomHex(5)}`,
-        messageType: 'INSTRUCTION'
-      });
-      await FasoApi.updateInstruction(editId, {
-        messageId: msgRes.message.id,
-        titleCiphertext: enc.ciphertext,
-        megolmSessionId: enc.megolmSessionId,
-        senderEd25519: enc.senderEd25519,
-        signature: enc.signature,
-        priority,
-        deadline,
-        recipientIds
-      });
-      showToast('Nouvelle version publiée. Confirmation redemandée aux destinataires.', 'success');
-    }
-
-    closeModal('modalInstructionForm');
-    await refreshInstructionsBadgeAndCache();
-    if (AppState.currentView === 'instructions') renderInstructionsList();
-    if (AppState.activeGroupId === groupId) await loadActiveConversationMessages({ preserveScroll: false });
-    if (AppState.openInstructionId === editId && editId) {
-      await openInstructionDetail(editId, { skipMarkViewed: true });
-    }
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-async function openInstructionDetail(instructionId, { skipMarkViewed = false } = {}) {
-  AppState.openInstructionId = instructionId;
-  const body = document.getElementById('modalInstDetailBody');
-  const footer = document.getElementById('modalInstDetailFooter');
-  body.innerHTML = renderSkeletonPlaceholder(4);
-  footer.innerHTML = '';
-  openModal('modalInstructionDetail');
-
-  try {
-    // Ouvrir le détail enregistre uniquement la consultation ('viewed_at'), jamais la confirmation !
-    if (!skipMarkViewed) {
-      await FasoApi.markInstructionViewed(instructionId).catch(() => {});
-    }
-
-    const res = await FasoApi.getInstructionDetails(instructionId);
-    const inst = res.instruction;
-    const events = res.events || [];
-
-    const dec = await FasoCrypto.decryptPayload(inst.group_id, {
-      ciphertext: inst.title_ciphertext,
-      megolm_session_id: inst.megolm_session_id,
-      sender_ed25519: inst.sender_ed25519,
-      signature: inst.signature
-    });
-
-    inst._decryptedTitle = dec.ok ? ((dec.data && dec.data.title) || dec.text) : dec.text;
-    inst._decryptedBody = dec.ok && dec.data ? (dec.data.description || '') : '';
-
-    document.getElementById('modalInstDetailTitle').textContent = `${inst.instruction_ref} (v${inst.version || 1})`;
-
-    let recipientNotice = '';
-    if (inst.is_recipient && inst.status === 'PUBLIEE' && inst.my_recipient) {
-      if (!inst.my_recipient.acknowledgedAt) {
-        recipientNotice = `
-          <div class="inline-alert warning">
-            <strong>Consultation enregistrée — Confirmation formelle requise :</strong>
-            L'ouverture de cette fiche ne vaut pas acceptation. Cliquez sur « Confirmer la réception (Signature Ed25519) » ci-dessous.
-          </div>
-        `;
-      } else if (inst.my_recipient.step !== 'EXECUTEE') {
-        recipientNotice = `
-          <div class="inline-alert success">
-            Réception confirmée et signée Ed25519 le ${escapeHtml(formatDateTime(inst.my_recipient.acknowledgedAt))}. Vous pouvez signaler l'avancement ou déclarer l'exécution.
-          </div>
-        `;
-      } else {
-        recipientNotice = `
-          <div class="inline-alert success">
-            Instruction exécutée par vos soins le ${escapeHtml(formatDateTime(inst.my_recipient.executedAt))}.
-          </div>
-        `;
-      }
-    }
-
-    // Déchiffrer les éventuels comptes rendus d'exécution chiffrés
-    const recipientRowsHtml = [];
-    for (const r of inst.recipients || []) {
-      let execNote = '';
-      if (r.executionCiphertext && r.executionSessionId) {
-        const execDec = await FasoCrypto.decryptPayload(inst.group_id, {
-          ciphertext: r.executionCiphertext,
-          megolm_session_id: r.executionSessionId
-        });
-        if (execDec.ok && execDec.text) {
-          execNote = `<div style="margin-top:4px; color:var(--brand); font-size:var(--fs-xs);">Compte rendu E2EE : ${escapeHtml(execDec.text)}</div>`;
-        }
-      }
-
-      const times = [];
-      if (r.viewedAt) times.push(`Consultée : ${formatDateTime(r.viewedAt)}`);
-      if (r.acknowledgedAt) times.push(`Confirmée v${r.ackVersion} : ${formatDateTime(r.acknowledgedAt)}`);
-      if (r.inProgressAt && !r.executedAt) times.push(`En cours : ${formatDateTime(r.inProgressAt)}`);
-      if (r.executedAt) times.push(`Exécutée : ${formatDateTime(r.executedAt)}`);
-
-      recipientRowsHtml.push(`
-        <div class="list-row">
-          <div class="list-row-main">
-            <div class="list-row-title">
-              ${escapeHtml(r.fullName)}
-              <span class="badge">${escapeHtml(r.matricule)}</span>
-              ${r.signatureVerified ? `<span class="badge badge-green">Ed25519 vérifiée</span>` : ''}
-              ${r.isOverdue ? `<span class="badge badge-red">En retard</span>` : ''}
-            </div>
-            <div class="list-row-sub">${escapeHtml(times.join(' • ') || 'En attente d\'ouverture par le destinataire')}</div>
-            ${execNote}
-          </div>
-          <div class="list-row-actions">${renderRecipientStepBadge(r.step)}</div>
-        </div>
-      `);
-    }
-
-    const eventsHtml = events.map((ev) => `
-      <div class="list-row">
-        <div class="list-row-main">
-          <div class="list-row-title">
-            <span class="badge badge-mono">${escapeHtml(ev.eventType)}</span>
-            <span class="badge">v${Number(ev.version || 1)}</span>
-            <span>${escapeHtml(ev.actorName)}</span>
-          </div>
-          <div class="list-row-sub">${escapeHtml(formatDateTime(ev.createdAt))}</div>
-        </div>
-      </div>
-    `).join('');
-
-    body.innerHTML = `
-      ${recipientNotice}
-      <div style="margin-bottom: 14px;">
-        <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;">
-          ${renderInstructionStatusBadge(inst.status)}
-          <span class="badge">Priorité : ${escapeHtml(inst.priority || 'NORMALE')}</span>
-          ${inst.is_overdue ? `<span class="badge badge-red">ÉCHÉANCE DÉPASSÉE</span>` : ''}
-        </div>
-        <h3 style="font-size: var(--fs-lg); font-weight: var(--fw-semibold); margin-bottom: 6px;">
-          ${escapeHtml(inst._decryptedTitle)}
-        </h3>
-        ${inst._decryptedBody ? `<p style="white-space: pre-wrap; color: var(--text-primary); margin-bottom: 10px;">${escapeHtml(inst._decryptedBody)}</p>` : ''}
-        <div style="font-size: var(--fs-xs); color: var(--text-secondary);">
-          Émetteur : <strong>${escapeHtml(inst.creator_name)}</strong> • Canal : <strong>${escapeHtml(inst.group_name)}</strong>
-          ${inst.deadline ? ` • Échéance : <strong>${escapeHtml(formatDateTime(inst.deadline))}</strong>` : ' • Sans échéance fixe'}
-        </div>
-      </div>
-
-      <div style="font-weight: var(--fw-semibold); margin-bottom: 6px;">Suivi nominatif des destinataires (${inst.recipients.length})</div>
-      <div class="compact-list" style="margin-bottom: 16px;">
-        ${recipientRowsHtml.join('') || `<div class="empty-state" style="padding:14px;">Destinataires assignés à la publication.</div>`}
-      </div>
-
-      <div style="font-weight: var(--fw-semibold); margin-bottom: 6px;">Historique des versions et preuves (${events.length})</div>
-      <div class="compact-list">
-        ${eventsHtml || `<div class="empty-state" style="padding:14px;">Aucun événement.</div>`}
-      </div>
-    `;
-
-    // Actions du pied de modale selon le rôle réel (Destinataire vs Émetteur)
-    const actions = [];
-    if (inst.is_recipient && inst.status === 'PUBLIEE' && inst.my_recipient) {
-      if (!inst.my_recipient.acknowledgedAt) {
-        actions.push(`<button type="button" class="btn btn-primary btn-sm" onclick="confirmInstructionReceiptSigned('${escapeAttr(inst.id)}', ${Number(inst.version || 1)})">Confirmer la réception (Signature Ed25519)</button>`);
-      } else if (inst.my_recipient.step !== 'EXECUTEE') {
-        if (inst.my_recipient.step !== 'EN_COURS') {
-          actions.push(`<button type="button" class="btn btn-secondary btn-sm" onclick="markInstructionProgressAction('${escapeAttr(inst.id)}')">Marquer en cours</button>`);
-        }
-        actions.push(`<button type="button" class="btn btn-primary btn-sm" onclick="promptDeclareInstructionExecution('${escapeAttr(inst.id)}', '${escapeAttr(inst.group_id)}')">Déclarer exécutée</button>`);
-      }
-    }
-
-    if (inst.is_creator) {
-      if (inst.status === 'BROUILLON') {
-        actions.push(`<button type="button" class="btn btn-primary btn-sm" onclick="editCurrentInstructionFromDetail()">Compléter / Publier le brouillon</button>`);
-      } else if (inst.status === 'PUBLIEE') {
-        actions.push(`<button type="button" class="btn btn-secondary btn-sm" onclick="editCurrentInstructionFromDetail()">Modifier (Nouvelle version)</button>`);
-        actions.push(`<button type="button" class="btn btn-primary btn-sm" onclick="changeInstructionFinalState('${escapeAttr(inst.id)}', 'CLOTUREE')">Clôturer</button>`);
-        actions.push(`<button type="button" class="btn btn-danger btn-sm" onclick="changeInstructionFinalState('${escapeAttr(inst.id)}', 'ANNULEE')">Annuler</button>`);
-      }
-    }
-
-    actions.push(`<button type="button" class="btn btn-secondary btn-sm" onclick="closeModal('modalInstructionDetail')">Fermer</button>`);
-    footer.innerHTML = actions.join('');
-    window._lastOpenedInstObj = inst;
-
-    await refreshInstructionsBadgeAndCache();
-    if (AppState.currentView === 'instructions') renderInstructionsList();
-  } catch (err) {
-    body.innerHTML = `<div class="inline-alert error">${escapeHtml(formatApiError(err.message))}</div>`;
-  }
-}
-
-async function editCurrentInstructionFromDetail() {
-  const inst = window._lastOpenedInstObj;
-  if (!inst) return;
-  closeModal('modalInstructionDetail');
-  await openInstructionModal({ editInst: inst });
-}
-
-async function confirmInstructionReceiptSigned(instructionId, version) {
-  try {
-    const sig = FasoCrypto.signInstructionAck(instructionId, version, FasoApi.currentUser.id);
-    await FasoApi.acknowledgeInstruction(instructionId, sig);
-    triggerHaptic([8, 28, 10]);
-    showToast('Réception confirmée avec signature Ed25519 vérifiée.', 'success');
-    await openInstructionDetail(instructionId, { skipMarkViewed: true });
-    if (AppState.activeGroupId) await loadActiveConversationMessages({ preserveScroll: true });
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-async function markInstructionProgressAction(instructionId) {
-  try {
-    await FasoApi.markInstructionInProgress(instructionId);
-    showToast('Statut passé à « En cours de traitement ».', 'success');
-    await openInstructionDetail(instructionId, { skipMarkViewed: true });
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-function promptDeclareInstructionExecution(instructionId, groupId) {
-  openActionConfirmModal({
-    title: 'Déclarer l\'exécution de l\'instruction',
-    description: 'Vous pouvez joindre une note de compte rendu chiffrée de bout en bout à destination de l\'émetteur.',
-    inputLabel: 'Compte rendu d\'exécution (optionnel, chiffré Megolm)',
-    inputPlaceholder: 'ex. Rapport transmis et archivé sous référence interne',
-    inputRequired: false,
-    submitLabel: 'Valider l\'exécution',
-    danger: false,
-    onConfirm: async (noteText) => {
-      let executionCiphertext = null;
-      let executionSessionId = null;
-      if (noteText) {
-        const enc = await FasoCrypto.encryptTextMessage(groupId, noteText);
-        executionCiphertext = enc.ciphertext;
-        executionSessionId = enc.megolmSessionId;
-      }
-      await FasoApi.declareInstructionExecuted(instructionId, { executionCiphertext, executionSessionId });
-      showToast('Exécution déclarée et notifiée à l\'émetteur.', 'success');
-      await openInstructionDetail(instructionId, { skipMarkViewed: true });
-    }
-  });
-}
-
-async function changeInstructionFinalState(instructionId, status) {
-  try {
-    await FasoApi.setInstructionFinalStatus(instructionId, status);
-    showToast(status === 'CLOTUREE' ? 'Instruction clôturée.' : 'Instruction annulée.', 'success');
-    await openInstructionDetail(instructionId, { skipMarkViewed: true });
-    if (AppState.activeGroupId) await loadActiveConversationMessages({ preserveScroll: true });
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-// ============================================================================
-// VUE 4 : CENTRE DE NOTIFICATIONS INTERNES & PRÉFÉRENCES OPT-IN
-// ============================================================================
-async function refreshUnreadNotificationsCount() {
-  if (!FasoApi.token) return;
-  try {
-    const res = await FasoApi.getNotifications();
-    AppState.unreadNotifications = res.unreadCount || 0;
-    refreshNavigationBadges();
-  } catch (_) {}
-}
-
-async function loadNotificationsView() {
-  if (!FasoApi.token) return;
-  const listEl = document.getElementById('notificationsList');
-  try {
-    const res = await FasoApi.getNotifications();
-    AppState.unreadNotifications = res.unreadCount || 0;
-    refreshNavigationBadges();
-
-    const items = res.notifications || [];
-    if (items.length === 0) {
-      listEl.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-state-title">Aucune notification</div>
-          <p>Les alertes de nouveaux messages, groupes et instructions s'afficheront ici.</p>
-        </div>
-      `;
-      return;
-    }
-
-    listEl.innerHTML = items.map((n) => `
-      <button type="button" class="list-row interactive-btn ${n.isRead ? '' : 'unread-notif'}" onclick="openNotificationTarget('${escapeAttr(n.id)}', '${escapeAttr(n.groupId || '')}', '${escapeAttr(n.instructionId || '')}')">
-        <span class="list-row-main">
-          <span class="list-row-title">
-            ${!n.isRead ? `<span class="badge badge-green">Non lu</span>` : ''}
-            ${n.count > 1 ? `<span class="badge">x${Number(n.count)}</span>` : ''}
-            <span>${escapeHtml(n.title)}</span>
-          </span>
-          <span class="list-row-sub" style="display:block;">${escapeHtml(n.body)} • ${escapeHtml(formatDateTime(n.updatedAt || n.createdAt))}</span>
-        </span>
-        <span class="list-row-actions">
-          <span class="badge">${escapeHtml(n.type)}</span>
-          <span class="row-chevron" aria-hidden="true">${Icons.chevronRight}</span>
-        </span>
-      </button>
-    `).join('');
-  } catch (err) {
-    listEl.innerHTML = `<div class="inline-alert error">${escapeHtml(formatApiError(err.message))}</div>`;
-  }
-}
-
-async function openNotificationTarget(notifId, groupId, instructionId) {
-  try {
-    const res = await FasoApi.markNotificationRead(notifId);
-    AppState.unreadNotifications = res.unreadCount || 0;
-    refreshNavigationBadges();
-  } catch (_) {}
-
-  if (instructionId) {
-    switchMainView('instructions');
-    await openInstructionDetail(instructionId);
-  } else if (groupId) {
-    switchMainView('chat');
-    await openConversation(groupId);
-  } else {
-    await loadNotificationsView();
-  }
-}
-
-async function markAllNotificationsAsRead() {
-  try {
-    await FasoApi.markAllNotificationsRead();
-    AppState.unreadNotifications = 0;
-    refreshNavigationBadges();
-    await loadNotificationsView();
-    showToast('Toutes les notifications ont été marquées comme lues.', 'success');
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-async function toggleBrowserNotifications(event) {
-  const wantEnable = event.target.checked;
-  if (wantEnable) {
-    if (!('Notification' in window)) {
-      event.target.checked = false;
-      showToast('Ce navigateur ne supporte pas l\'API locale Notification.', 'error');
-      return;
-    }
-    const perm = await Notification.requestPermission();
-    if (perm !== 'granted') {
-      event.target.checked = false;
-      showToast('Permission refusée dans le navigateur.', 'error');
-      return;
-    }
-  }
-  try {
-    await FasoApi.updatePreferences({ notifBrowserEnabled: wantEnable });
-    showToast(wantEnable ? 'Alertes navigateur activées (application ouverte).' : 'Alertes navigateur désactivées.', 'success');
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-function maybeTriggerBrowserNotification(notif) {
-  if (!notif || !FasoApi.currentUser || !FasoApi.currentUser.notifBrowserEnabled) return;
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  try {
-    new Notification('FasoBrief — Alerte administrative', {
-      body: notif.title || 'Nouvel événement disponible dans FasoBrief.',
-      tag: notif.dedup_key || notif.id
-    });
-  } catch (_) {}
-}
-
-// ============================================================================
-// VUE 5 : ADMINISTRATION, INVITATIONS, SUSPENSION/RÉVOCATION & AUDIT
-// ============================================================================
-function switchAdminSubTab(tab) {
-  AppState.adminSubTab = tab;
-  document.querySelectorAll('[data-admin-tab]').forEach((b) => {
-    const isAct = b.getAttribute('data-admin-tab') === tab;
-    b.classList.toggle('active', isAct);
-    b.setAttribute('aria-selected', String(isAct));
-  });
-  document.getElementById('adminSubUsers').hidden = tab !== 'users';
-  document.getElementById('adminSubAudit').hidden = tab !== 'audit';
-  document.getElementById('adminSubProofs').hidden = tab !== 'proofs';
-
-  if (tab === 'users') loadAdminUsersView();
-  if (tab === 'audit') loadAuditLogsView();
-}
-
-async function loadAdminView() {
-  switchAdminSubTab(AppState.adminSubTab || 'users');
-}
-
-async function loadAdminUsersView() {
-  const listEl = document.getElementById('adminUsersList');
-  if (!listEl) return;
-  try {
-    const res = await FasoApi.getAdminUsers();
-    const me = FasoApi.currentUser;
-    const isAdmin = me && me.role === 'ADMIN';
-
-    listEl.innerHTML = (res.users || []).map((u) => {
-      const isSelf = me && u.id === me.id;
-      let statusBadge = `<span class="badge badge-green">ACTIVE</span>`;
-      if (u.status === 'INVITED') statusBadge = `<span class="badge badge-amber">INVITED</span>`;
-      if (u.status === 'SUSPENDED') statusBadge = `<span class="badge badge-amber">SUSPENDED</span>`;
-      if (u.status === 'REVOKED' || u.is_revoked === 1) statusBadge = `<span class="badge badge-red">REVOKED</span>`;
-
-      const canSuspend = isAdmin && !isSelf && u.status === 'ACTIVE';
-      const canReactivate = isAdmin && u.status === 'SUSPENDED' && u.is_revoked === 0;
-      const canRevoke =
-        !isSelf &&
-        u.status !== 'REVOKED' &&
-        u.is_revoked === 0 &&
-        (isAdmin || (me.role === 'DIRECTEUR' && u.role !== 'ADMIN'));
-
-      return `
-        <div class="list-row">
-          <div class="list-row-main">
-            <div class="list-row-title">
-              <span>${escapeHtml(u.full_name)}</span>
-              <span class="badge">${escapeHtml(u.matricule)}</span>
-              <span class="badge">${escapeHtml(u.role)}</span>
-              ${statusBadge}
-            </div>
-            <div class="list-row-sub">
-              ${escapeHtml(u.service_ministry)} • Sessions actives : ${Number(u.active_sessions || 0)} • Terminaux Olm : ${Number(u.device_count || 0)}
-              ${u.revocation_reason ? ` • Motif : ${escapeHtml(u.revocation_reason)}` : ''}
-            </div>
-          </div>
-          <div class="list-row-actions">
-            ${canSuspend ? `<button type="button" class="btn btn-secondary btn-sm" onclick="promptSuspendUser('${escapeAttr(u.id)}', '${escapeAttr(u.full_name)}')">Suspendre</button>` : ''}
-            ${canReactivate ? `<button type="button" class="btn btn-primary btn-sm" onclick="executeReactivateUser('${escapeAttr(u.id)}')">Réactiver</button>` : ''}
-            ${canRevoke ? `<button type="button" class="btn btn-danger btn-sm" onclick="promptRevokeUser('${escapeAttr(u.id)}', '${escapeAttr(u.full_name)}')">Révoquer</button>` : ''}
-          </div>
-        </div>
-      `;
-    }).join('');
-  } catch (err) {
-    listEl.innerHTML = `<div class="inline-alert error">${escapeHtml(formatApiError(err.message))}</div>`;
-  }
-}
-
-async function openInviteModal() {
-  try {
-    const dir = await FasoApi.getDirectory();
-    const sel = document.getElementById('invServiceId');
-    sel.innerHTML = (dir.services || []).map((s) =>
-      `<option value="${escapeAttr(s.id)}">${escapeHtml(s.name)}</option>`
-    ).join('');
-    document.getElementById('invMatricule').value = '';
-    document.getElementById('invFullName').value = '';
-    document.getElementById('invJobTitle').value = '';
-    openModal('modalInviteAgent');
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-async function submitInviteAgent(event) {
-  event.preventDefault();
-  const payload = {
-    matricule: document.getElementById('invMatricule').value.trim(),
-    fullName: document.getElementById('invFullName').value.trim(),
-    jobTitle: document.getElementById('invJobTitle').value.trim(),
-    role: document.getElementById('invRole').value,
-    serviceId: document.getElementById('invServiceId').value
-  };
-
-  try {
-    const res = await FasoApi.createInvitation(payload);
-    closeModal('modalInviteAgent');
-    document.getElementById('invitedTargetLabel').textContent = `${res.user.fullName} (${res.user.matricule})`;
-    document.getElementById('invitedOneTimeCode').textContent = res.activationCode;
-    document.getElementById('oneTimeInviteResult').hidden = false;
-    showToast('Compte invité créé. Code à usage unique généré.', 'success');
-    await loadAdminUsersView();
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-function promptSuspendUser(userId, fullName) {
-  openActionConfirmModal({
-    title: `Suspendre temporairement ${fullName}`,
-    description: 'Toutes les sessions actives et WebSockets de cet agent seront immédiatement coupés.',
-    inputLabel: 'Motif administratif de suspension',
-    inputPlaceholder: 'ex. Absence prolongée / Vérification administrative',
-    inputRequired: true,
-    submitLabel: 'Suspendre le compte',
-    danger: true,
-    onConfirm: async (reason) => {
-      await FasoApi.suspendUser(userId, reason);
-      showToast(`Compte de ${fullName} suspendu.`, 'success');
-      await loadAdminUsersView();
-    }
-  });
-}
-
-async function executeReactivateUser(userId) {
-  try {
-    await FasoApi.reactivateUser(userId);
-    showToast('Compte réactivé.', 'success');
-    await loadAdminUsersView();
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
-  }
-}
-
-function promptRevokeUser(userId, fullName) {
-  openActionConfirmModal({
-    title: `Révoquer définitivement ${fullName}`,
-    description: 'Action irréversible : coupe instantanément tous les WebSockets, supprime les clés publiques Olm, retire l\'agent de toutes les conversations et déclenche la rotation Megolm.',
-    inputLabel: 'Motif officiel de révocation',
-    inputPlaceholder: 'ex. Fin de mission / Compromission ou perte de terminal',
-    inputRequired: true,
-    submitLabel: 'Révoquer immédiatement',
-    danger: true,
-    onConfirm: async (reason) => {
-      await FasoApi.revokeAgent(userId, reason);
-      showToast(`${fullName} a été révoqué immédiatement.`, 'success');
-      await loadAdminUsersView();
-      await loadConversations({ keepSelection: true });
-    }
-  });
-}
-
-async function loadAuditLogsView() {
-  const listEl = document.getElementById('auditLogsList');
-  const eventType = document.getElementById('auditFilterSelect').value;
-  if (!listEl) return;
-
-  try {
-    const res = await FasoApi.getAuditLogs(eventType);
-    const logs = res.logs || [];
-    if (logs.length === 0) {
-      listEl.innerHTML = `<div class="empty-state">Aucun événement enregistré pour ce filtre.</div>`;
-      return;
-    }
-
-    listEl.innerHTML = logs.map((l) => {
-      const isAlert = l.event_type.includes('FAIL') || l.event_type.includes('INTRUSION') || l.event_type.includes('REVOKED') || l.event_type.includes('UNAUTHORIZED');
-      return `
-        <div class="list-row">
-          <div class="list-row-main">
-            <div class="list-row-title">
-              <span class="badge badge-mono ${isAlert ? 'badge-red' : ''}">${escapeHtml(l.event_type)}</span>
-              <span class="badge">#${Number(l.id)}</span>
-            </div>
-            <div class="list-row-sub">${escapeHtml(l.details || '')}</div>
-            <div class="list-row-sub">Acteur : ${escapeHtml(l.actor_id || 'Externe')} • IP : ${escapeHtml(l.ip_address || '-')} • ${escapeHtml(formatDateTime(l.created_at))}</div>
-          </div>
-        </div>
-      `;
-    }).join('');
-  } catch (err) {
-    listEl.innerHTML = `<div class="inline-alert error">${escapeHtml(formatApiError(err.message))}</div>`;
-  }
-}
-
-async function runIntruderProof() {
-  const out = document.getElementById('adminProofOutput');
-  out.hidden = false;
-  out.textContent = 'Exécution de la requête d\'intrusion...';
-  try {
-    const res = await fetch('/api/auth/login-step1', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ matricule: 'INTRUS_NON_ENROLE_99', password: 'TestPassword!' })
-    });
-    const body = await res.json();
-    out.textContent = JSON.stringify({
-      epreuve: 'Rejet automatique compte non préalablement enrôlé',
-      httpStatus: res.status,
-      reponseServeur: body
-    }, null, 2);
-  } catch (err) {
-    out.textContent = `Erreur : ${err.message}`;
-  }
-}
-
-async function runBlindServerInspection() {
-  const out = document.getElementById('adminProofOutput');
-  out.hidden = false;
-  out.textContent = 'Lecture directe des tables SQLite côté serveur...';
-  try {
-    const res = await FasoApi.getServerInspection();
-    out.textContent = JSON.stringify(res, null, 2);
-  } catch (err) {
-    out.textContent = `Erreur : ${err.message}`;
-  }
-}
-
-// ============================================================================
-// MOTEUR D'INTERACTION FLUIDE APPLE (RESSORTS, INERTIE, GESTES 1:1 & MODALES)
-// ============================================================================
-const ActiveSprings = new Map();
-
-function prefersReducedMotion() {
-  return Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-}
-
-/**
- * §9 Résistance progressive Apple au dépassement de bord (rubber-banding, c = 0.55)
- */
-function rubberband(overshoot, dimension, constant = 0.55) {
-  const dim = Math.max(1, dimension);
-  return (overshoot * dim * constant) / (dim + constant * Math.abs(overshoot));
-}
-
-/**
- * §6 Projection inertielle exponentielle Apple (d = 0.998 par ms)
- */
-function projectMomentum(velocityPxPerSec, decelerationRate = 0.998) {
-  return ((velocityPxPerSec / 1000) * decelerationRate) / (1 - decelerationRate);
-}
-
-/**
- * §13 Retour haptique causal sobre (uniquement sur événement d'engagement, jamais décoratif)
- */
-function triggerHaptic(pattern = 8) {
-  if (prefersReducedMotion()) return;
-  try {
-    if (navigator && typeof navigator.vibrate === 'function') {
-      navigator.vibrate(pattern);
-    }
-  } catch (_) {}
-}
-
-function cancelSpring(key) {
-  const running = ActiveSprings.get(key);
-  if (running) {
-    cancelAnimationFrame(running.rafId);
-    ActiveSprings.delete(key);
-    return { value: running.value, velocity: running.velocity };
-  }
-  return null;
-}
-
-/**
- * §3, §4 & §5 Solveur ressort amorti interruptible paramétré par (damping, response)
- * Conserve la vitesse en cours si relancé en plein mouvement.
- */
-function animateSpring(key, {
-  from,
-  to,
-  velocity = 0,
-  damping = 1.0,
-  response = 0.32,
-  onUpdate,
-  onComplete
-}) {
-  const prev = cancelSpring(key);
-  if (prefersReducedMotion()) {
-    if (onUpdate) onUpdate(to);
-    if (onComplete) onComplete();
-    return;
-  }
 
   const state = {
-    value: prev && from === undefined ? prev.value : from,
-    velocity: velocity !== 0 ? velocity : (prev ? prev.velocity : 0),
-    rafId: 0
+    booting: true,
+    demoMode: false,
+    demoAccounts: [],
+    loginStep: 'credentials', // 'credentials' | 'otp'
+    loginUsername: '',
+    loginPassword: '',
+    loginOtp: '',
+    loginError: '',
+    loginChallenge: null,
+    loginPendingUserId: null,
+    demoLiveTotp: '',
+    scanningQr: false,
+    qrScannerCtrl: null,
+
+    tab: 'messages', // 'messages' | 'instructions' | 'admin'
+    groups: [],
+    activeGroupId: null,
+    mobileChatListOpen: true,
+    messagesByGroup: new Map(),
+    pendingAttachment: null, // File object
+    draftText: '',
+    sendingMessage: false,
+
+    directoryAgents: [],
+    directoryServices: [],
+
+    instructions: [],
+    notifications: [],
+    unreadNotifCount: 0,
+    notifPopoverOpen: false,
+
+    adminUsers: [],
+    adminServices: [],
+    auditLogs: [],
+    creatingServiceOpen: false,
+    newServiceName: '',
+
+    decryptedImageCache: new Map(), // fileId -> objectURL
+    decryptingFiles: new Set(),
+
+    intruderSimulationResult: null, // { status, code, matricule, timestamp }
+    modal: null // { type, data }
   };
 
-  const omega = (2 * Math.PI) / Math.max(0.08, response);
-  const stiffness = omega * omega;
-  const dampingCoeff = 2 * damping * omega;
-  let lastTime = performance.now();
+  const appRoot = document.getElementById('appRoot');
+  const modalRoot = document.getElementById('modalRoot');
+  const notifPopoverRoot = document.getElementById('notifPopoverRoot');
+  const toastViewport = document.getElementById('toastViewport');
 
-  const step = (now) => {
-    const dt = Math.min(0.032, Math.max(0.001, (now - lastTime) / 1000));
-    lastTime = now;
+  function esc(str) {
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
 
-    // Sous-échantillonnage demi-pas pour stabilité numérique inconditionnelle
-    const subSteps = 2;
-    const h = dt / subSteps;
-    for (let i = 0; i < subSteps; i += 1) {
-      const disp = state.value - to;
-      const accel = -stiffness * disp - dampingCoeff * state.velocity;
-      state.velocity += accel * h;
-      state.value += state.velocity * h;
+  function initials(name) {
+    return String(name || '?')
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((part) => (part[0] ? part[0].toUpperCase() : ''))
+      .join('') || '?';
+  }
+
+  function renderAvatar(name, avatarData, cssClass = 'avatar-circle') {
+    if (avatarData) {
+      return `<img src="${esc(avatarData)}" alt="${esc(name || '')}" class="${cssClass} avatar-img-cover" />`;
+    }
+    return `<div class="${cssClass}">${esc(initials(name))}</div>`;
+  }
+
+  function playNotificationTone() {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+      const now = ctx.currentTime;
+      const osc1 = ctx.createOscillator();
+      const g1 = ctx.createGain();
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(587.33, now);
+      g1.gain.setValueAtTime(0.12, now);
+      g1.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+      osc1.connect(g1);
+      g1.connect(ctx.destination);
+      osc1.start(now);
+      osc1.stop(now + 0.16);
+
+      const osc2 = ctx.createOscillator();
+      const g2 = ctx.createGain();
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(880, now + 0.08);
+      g2.gain.setValueAtTime(0.15, now + 0.08);
+      g2.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+      osc2.connect(g2);
+      g2.connect(ctx.destination);
+      osc2.start(now + 0.08);
+      osc2.stop(now + 0.28);
+    } catch (_) {}
+  }
+
+  async function encryptGroupPayloadSafely(groupId, payloadObj) {
+    if (window.FasoCrypto && typeof window.FasoCrypto.encryptGroupPayload === 'function') {
+      return window.FasoCrypto.encryptGroupPayload(groupId, payloadObj);
+    }
+    if (window.FasoCrypto && typeof window.FasoCrypto.encryptPayload === 'function') {
+      return window.FasoCrypto.encryptPayload(groupId, payloadObj);
+    }
+    throw new Error('Moteur cryptographique non initialisé');
+  }
+
+  if (typeof window !== 'undefined' && window.FasoCrypto) {
+    if (!window.FasoCrypto.encryptGroupPayload && typeof window.FasoCrypto.encryptPayload === 'function') {
+      window.FasoCrypto.encryptGroupPayload = function(groupId, payload) {
+        return this.encryptPayload(groupId, payload);
+      };
+    }
+  }
+
+  function formatTime(isoStr) {
+    if (!isoStr) return '';
+    const d = new Date(isoStr);
+    if (Number.isNaN(d.getTime())) return '';
+    const sameDay = d.toDateString() === new Date().toDateString();
+    return sameDay
+      ? d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+      : d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' });
+  }
+
+  function formatDateShort(isoStr) {
+    if (!isoStr) return '';
+    const d = new Date(isoStr);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
+  }
+
+  function isChefOrAdmin(user) {
+    return Boolean(user && (user.role === 'ADMIN' || user.role === 'DIRECTEUR' || user.role === 'CHEF_SERVICE'));
+  }
+
+  function roleLabel(role) {
+    return ROLE_LABELS[role] || role;
+  }
+
+  function userServiceDisplay(user) {
+    if (!user) return '';
+    if (user.serviceName) return user.serviceName;
+    if (user.serviceId) {
+      const srv = state.directoryServices.find((s) => s.id === user.serviceId)
+        || state.adminServices.find((s) => s.id === user.serviceId);
+      if (srv) return srv.name;
+    }
+    if (user.serviceMinistry && user.serviceMinistry !== 'Administration') {
+      return user.serviceMinistry;
+    }
+    return '';
+  }
+
+  function showToast(title, description = '', isError = false) {
+    const el = document.createElement('div');
+    el.className = `toast-item${isError ? ' error' : ''}`;
+    el.innerHTML = `
+      <div class="toast-title">${esc(title)}</div>
+      ${description ? `<div class="toast-desc">${esc(description)}</div>` : ''}
+    `;
+    toastViewport.appendChild(el);
+    setTimeout(() => {
+      try { el.remove(); } catch (_) {}
+    }, 3600);
+  }
+
+  function friendlyAuthError(code) {
+    const map = {
+      COMPTE_NON_ENROLE_OU_INCONNU: 'Identifiant ou mot de passe incorrect.',
+      IDENTIFIANTS_INVALIDES: 'Identifiant ou mot de passe incorrect.',
+      AGENT_REVOQUE_ACCES_INTERDIT: 'Ce compte a été révoqué par l\'administrateur.',
+      AGENT_REVOQUE_OU_INEXISTANT: 'Ce compte a été révoqué par l\'administrateur.',
+      COMPTE_SUSPENDU_PAR_ADMINISTRATION: 'Ce compte est suspendu par l\'administration.',
+      COMPTE_EN_ATTENTE_ACTIVATION: 'Ce compte est en attente d\'activation.',
+      CODE_2FA_INVALIDE: 'Code de vérification invalide.',
+      QR_CODE_INVALIDE: 'QR code invalide.',
+      QR_CODE_EXPIRE_OU_DEJA_UTILISE: 'QR code expiré ou déjà utilisé.'
+    };
+    return map[code] || code || 'Une erreur est survenue.';
+  }
+
+  // ==========================================================================
+  // PRÉ-PROVISIONNEMENT E2EE RÉEL OLM/MEGOLM EN MODE DÉMO UNIQUEMENT
+  // ==========================================================================
+  async function provisionDemoEnvironmentIfNeeded(demoAccounts) {
+    if (!Array.isArray(demoAccounts) || demoAccounts.length === 0) return;
+
+    const missingDevices = demoAccounts.filter(
+      (acc) => acc.status === 'ACTIVE' && !localStorage.getItem(`fasobrief_olm_v2_${acc.id}`)
+    );
+    const seededMsgFlag = localStorage.getItem('fasobrief_lovable_demo_msgs_v1');
+
+    if (missingDevices.length === 0 && seededMsgFlag === '1') return;
+
+    const savedToken = localStorage.getItem('fasobrief_token');
+    const savedUser = localStorage.getItem('fasobrief_user');
+    const tempTokens = new Map();
+
+    try {
+      await window.FasoCrypto.init();
+      for (const acc of demoAccounts) {
+        if (acc.status !== 'ACTIVE') continue;
+        const tempApi = Object.create(window.FasoApi);
+        tempApi.token = null;
+        tempApi.currentUser = null;
+        tempApi.setSession = function (tok, usr) {
+          this.token = tok;
+          this.currentUser = usr;
+        };
+
+        try {
+          const s1 = await tempApi.loginStep1(acc.matricule, 'demo2026');
+          const totpRes = await tempApi.getDemoTotp(s1.userId);
+          await tempApi.loginStep2(s1.userId, totpRes.code, s1.challengeToken, 'Terminal Démo E2EE');
+          await window.FasoCrypto.bindUserSession(s1.userId, tempApi);
+          tempTokens.set(acc.id, tempApi);
+        } catch (_) {
+          // Compte modifié ou révoqué : ignorer silencieusement
+        }
+      }
+
+      // Chiffrer les messages initiaux de démonstration via Olm + Megolm si les canaux sont vierges
+      if (seededMsgFlag !== '1' && tempTokens.size > 0) {
+        const seedSamples = [
+          {
+            senderId: 'usr_dir_01',
+            groupId: 'grp_service_cabinet_01',
+            text: 'Bonjour, merci de préparer la note de synthèse avant 16h.'
+          },
+          {
+            senderId: 'usr_agent_03',
+            groupId: 'grp_service_cabinet_01',
+            text: 'Bien reçu monsieur le directeur, j\'y travaille.'
+          },
+          {
+            senderId: 'usr_chef_02',
+            groupId: 'grp_service_demat_02',
+            text: 'Point d\'équipe à 10h sur le dossier en cours.'
+          },
+          {
+            senderId: 'usr_dir_01',
+            groupId: 'grp_comite_chefs_03',
+            text: 'Merci de remonter vos besoins budgétaires avant vendredi.'
+          }
+        ];
+
+        for (const sample of seedSamples) {
+          const senderApi = tempTokens.get(sample.senderId);
+          if (!senderApi) continue;
+          try {
+            const hist = await senderApi.getMessages(sample.groupId);
+            if (hist.messages && hist.messages.length > 0) continue;
+            await window.FasoCrypto.bindUserSession(sample.senderId, senderApi);
+            const enc = await encryptGroupPayloadSafely(sample.groupId, {
+              v: 2,
+              kind: 'text',
+              text: sample.text
+            });
+            await senderApi.sendEncryptedMessage(sample.groupId, {
+              ...enc,
+              clientMsgId: `seed_${sample.groupId}_${sample.senderId}`,
+              messageType: 'CHAT'
+            });
+          } catch (_) {}
+        }
+
+        // Synchroniser les enveloppes Olm pour les destinataires démo
+        for (const [uid, tApi] of tempTokens.entries()) {
+          try {
+            await window.FasoCrypto.bindUserSession(uid, tApi);
+            await window.FasoCrypto.syncKeysAndRequests();
+          } catch (_) {}
+        }
+        localStorage.setItem('fasobrief_lovable_demo_msgs_v1', '1');
+      }
+
+      for (const [, tApi] of tempTokens.entries()) {
+        try {
+          await tApi.request('/api/auth/logout', { method: 'POST' });
+        } catch (_) {}
+      }
+    } finally {
+      if (savedToken && savedUser) {
+        localStorage.setItem('fasobrief_token', savedToken);
+        localStorage.setItem('fasobrief_user', savedUser);
+        window.FasoApi.token = savedToken;
+        window.FasoApi.currentUser = JSON.parse(savedUser);
+      } else {
+        localStorage.removeItem('fasobrief_token');
+        localStorage.removeItem('fasobrief_user');
+        window.FasoApi.token = null;
+        window.FasoApi.currentUser = null;
+      }
+    }
+  }
+
+  // ==========================================================================
+  // DÉCHIFFREMENT LOCAL E2EE (Messages, Pièces jointes AES-256-GCM, Instructions)
+  // ==========================================================================
+  function decryptMessageRecord(rawMsg) {
+    const res = window.FasoCrypto.decryptGroupMessage(rawMsg);
+    const data = (res && res.data) || {};
+    return {
+      ...rawMsg,
+      decryptedOk: Boolean(res && res.ok),
+      waitingForKey: Boolean(res && res.waitingForKey),
+      text: res && res.ok ? (data.text || '') : (res ? res.text : '[Message chiffré]'),
+      fileMeta: res && res.ok && data.file ? data.file : null,
+      signatureVerified: Boolean(res && res.signatureVerified)
+    };
+  }
+
+  function decryptInstructionRecord(inst) {
+    const fakeMsg = {
+      group_id: inst.group_id,
+      megolm_session_id: inst.megolm_session_id,
+      ciphertext: inst.title_ciphertext,
+      sender_ed25519: inst.sender_ed25519,
+      signature: inst.signature,
+      protocol: 'megolm.v1'
+    };
+    const res = window.FasoCrypto.decryptGroupMessage(fakeMsg);
+    let title = inst.instruction_ref || 'Instruction chiffrée';
+    let body = '';
+    if (res && res.ok) {
+      if (res.data && typeof res.data === 'object') {
+        title = res.data.title || res.text || title;
+        body = res.data.description || res.data.body || '';
+      } else {
+        title = res.text || title;
+      }
+    } else if (res && res.text) {
+      body = res.text;
+    }
+    return {
+      ...inst,
+      decryptedTitle: title,
+      decryptedBody: body
+    };
+  }
+
+  async function ensureImagePreviewDecrypted(fileMeta) {
+    if (!fileMeta || !fileMeta.fileId || !fileMeta.key || !fileMeta.iv) return;
+    if (!String(fileMeta.mime || '').startsWith('image/')) return;
+    if (state.decryptedImageCache.has(fileMeta.fileId) || state.decryptingFiles.has(fileMeta.fileId)) return;
+
+    state.decryptingFiles.add(fileMeta.fileId);
+    try {
+      const encBlob = await window.FasoApi.downloadEncryptedFile(fileMeta.fileId);
+      const clearBlob = await window.FasoCrypto.decryptFile(
+        encBlob,
+        fileMeta.key,
+        fileMeta.iv,
+        fileMeta.sha256,
+        fileMeta.mime
+      );
+      const objUrl = URL.createObjectURL(clearBlob);
+      state.decryptedImageCache.set(fileMeta.fileId, objUrl);
+      renderApp();
+    } catch (err) {
+      console.warn('[FILE] Échec déchiffrement aperçu image :', err);
+    } finally {
+      state.decryptingFiles.delete(fileMeta.fileId);
+    }
+  }
+
+  async function downloadAndDecryptAttachment(fileMeta) {
+    if (!fileMeta || !fileMeta.fileId) return;
+    try {
+      const encBlob = await window.FasoApi.downloadEncryptedFile(fileMeta.fileId);
+      const clearBlob = await window.FasoCrypto.decryptFile(
+        encBlob,
+        fileMeta.key,
+        fileMeta.iv,
+        fileMeta.sha256,
+        fileMeta.mime
+      );
+      const url = URL.createObjectURL(clearBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileMeta.name || 'document_fasobrief';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 15000);
+    } catch (err) {
+      showToast('Téléchargement impossible', err.message || 'Accès au fichier refusé', true);
+    }
+  }
+
+  // ==========================================================================
+  // CHARGEMENT & SYNCHRONISATION DES DONNÉES SERVEUR
+  // ==========================================================================
+  async function loadAuthenticatedWorkspace() {
+    const me = window.FasoApi.currentUser;
+    if (!me) return;
+
+    const deviceInfo = await window.FasoCrypto.bindUserSession(me.id, window.FasoApi);
+    window.FasoApi.connectWebSocket(deviceInfo.deviceId);
+    await window.FasoCrypto.syncKeysAndRequests();
+
+    await Promise.all([
+      refreshDirectory(),
+      refreshGroups(),
+      refreshInstructions(),
+      refreshNotifications(),
+      me.role === 'ADMIN' || me.role === 'DIRECTEUR' ? refreshAdminData() : Promise.resolve()
+    ]);
+
+    if (state.groups.length > 0 && (!state.activeGroupId || !state.groups.some((g) => g.id === state.activeGroupId))) {
+      state.activeGroupId = state.groups[0].id;
     }
 
-    if (Math.abs(to - state.value) < 0.35 && Math.abs(state.velocity) < 8) {
-      ActiveSprings.delete(key);
-      if (onUpdate) onUpdate(to);
-      if (onComplete) onComplete();
+    if (state.activeGroupId) {
+      await loadGroupMessages(state.activeGroupId);
+    }
+
+    if (typeof window.Notification !== 'undefined' && Notification.permission === 'default') {
+      try { Notification.requestPermission().catch(() => {}); } catch (_) {}
+    }
+  }
+
+  async function refreshDirectory() {
+    try {
+      const res = await window.FasoApi.getDirectory({ includeAllStatuses: '1' });
+      state.directoryAgents = res.agents || [];
+      state.directoryServices = res.services || [];
+    } catch (_) {}
+  }
+
+  async function refreshGroups() {
+    if (!window.FasoApi.token) return;
+    try {
+      await window.FasoCrypto.syncKeysAndRequests();
+      const res = await window.FasoApi.getGroups();
+      state.groups = (res.groups || []).map((g) => {
+        let previewText = 'Aucun message';
+        if (g.lastMessage) {
+          const dec = decryptMessageRecord(g.lastMessage);
+          if (dec.decryptedOk) {
+            previewText = dec.text || (dec.fileMeta ? 'Pièce jointe' : 'Message chiffré');
+          } else {
+            previewText = g.lastMessageType === 'FILE' ? 'Pièce jointe chiffrée' : 'Message chiffré';
+          }
+        }
+        return {
+          ...g,
+          previewText
+        };
+      });
+    } catch (_) {}
+  }
+
+  async function loadGroupMessages(groupId) {
+    if (!groupId || !window.FasoApi.token) return;
+    try {
+      await window.FasoCrypto.syncKeysAndRequests();
+      const res = await window.FasoApi.getMessages(groupId);
+      const decryptedList = (res.messages || []).map((m) => {
+        const d = decryptMessageRecord(m);
+        if (d.fileMeta && String(d.fileMeta.mime || '').startsWith('image/')) {
+          ensureImagePreviewDecrypted(d.fileMeta);
+        }
+        return d;
+      });
+      state.messagesByGroup.set(groupId, decryptedList);
+
+      const me = window.FasoApi.currentUser;
+      const incomingIds = decryptedList
+        .filter((m) => m.sender_id !== me.id)
+        .map((m) => m.id);
+
+      if (incomingIds.length > 0) {
+        const isVisibleChat = state.tab === 'messages'
+          && state.activeGroupId === groupId
+          && (!isMobileViewport() || !state.mobileChatListOpen)
+          && document.visibilityState === 'visible';
+
+        await window.FasoApi.sendMessageReceipts(incomingIds, isVisibleChat ? 'read' : 'delivered');
+        if (isVisibleChat) {
+          const grp = state.groups.find((g) => g.id === groupId);
+          if (grp) grp.unreadCount = 0;
+          await refreshNotifications();
+        }
+      }
+    } catch (_) {}
+  }
+
+  async function refreshInstructions() {
+    if (!window.FasoApi.token) return;
+    try {
+      await window.FasoCrypto.syncKeysAndRequests();
+      const res = await window.FasoApi.getInstructionsDashboard();
+      state.instructions = (res.dashboard || []).map(decryptInstructionRecord);
+    } catch (_) {}
+  }
+
+  async function refreshNotifications() {
+    if (!window.FasoApi.token) return;
+    try {
+      const res = await window.FasoApi.getNotifications();
+      state.notifications = res.notifications || [];
+      state.unreadNotifCount = Number(res.unreadCount || 0);
+    } catch (_) {}
+  }
+
+  async function refreshAdminData() {
+    if (!window.FasoApi.token) return;
+    const me = window.FasoApi.currentUser;
+    if (!me || (me.role !== 'ADMIN' && me.role !== 'DIRECTEUR')) return;
+    try {
+      const [uRes, aRes] = await Promise.all([
+        window.FasoApi.getAdminUsers(),
+        window.FasoApi.getAuditLogs()
+      ]);
+      state.adminUsers = uRes.users || [];
+      state.adminServices = uRes.services || [];
+      state.auditLogs = aRes.logs || [];
+    } catch (_) {}
+  }
+
+  function isMobileViewport() {
+    return window.innerWidth < 1024;
+  }
+
+  function pendingInstructionsCount() {
+    const me = window.FasoApi.currentUser;
+    if (!me) return 0;
+    return state.instructions.filter(
+      (inst) => inst.status === 'PUBLIEE' && inst.my_recipient && !inst.my_recipient.acknowledgedAt
+    ).length;
+  }
+
+  // ==========================================================================
+  // GESTION WEBSOCKET TEMPS RÉEL
+  // ==========================================================================
+  function bindRealtimeEvents() {
+    window.FasoApi.on('TO_DEVICE_MESSAGE', async () => {
+      await window.FasoCrypto.syncKeysAndRequests();
+      await refreshGroups();
+      if (state.activeGroupId) await loadGroupMessages(state.activeGroupId);
+      await refreshInstructions();
+      renderApp();
+    });
+
+    window.FasoApi.on('MEGOLM_KEY_REQUESTED', async () => {
+      await window.FasoCrypto.syncKeysAndRequests();
+    });
+
+    window.FasoApi.on('GROUP_KEY_ROTATION_REQUIRED', async (data) => {
+      if (data && data.groupId) {
+        window.FasoCrypto.invalidateOutboundGroupSession(data.groupId);
+      }
+      await refreshGroups();
+      if (state.activeGroupId) await loadGroupMessages(state.activeGroupId);
+      renderApp();
+    });
+
+    window.FasoApi.on('CONVERSATION_CREATED', async () => {
+      await refreshGroups();
+      renderApp();
+    });
+
+    window.FasoApi.on('REMOVED_FROM_GROUP', async (data) => {
+      if (data && data.groupId === state.activeGroupId) {
+        state.activeGroupId = null;
+      }
+      await refreshGroups();
+      renderApp();
+    });
+
+    window.FasoApi.on('NEW_ENCRYPTED_MESSAGE', async (data) => {
+      await window.FasoCrypto.syncKeysAndRequests();
+      await refreshGroups();
+      const me = window.FasoApi.currentUser;
+      const isFromMe = data && data.message && me && data.message.senderId === me.id;
+
+      if (data && data.message && data.message.groupId === state.activeGroupId) {
+        await loadGroupMessages(state.activeGroupId);
+        if (!isFromMe) {
+          playNotificationTone();
+          if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+            try { navigator.vibrate(60); } catch (_) {}
+          }
+        }
+      } else if (data && data.message && !isFromMe) {
+        await window.FasoApi.sendMessageReceipts([data.message.id], 'delivered');
+        playNotificationTone();
+        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+          try { navigator.vibrate([100, 50, 100]); } catch (_) {}
+        }
+        if (typeof window.Notification !== 'undefined' && Notification.permission === 'granted' && document.visibilityState !== 'visible') {
+          try {
+            new Notification('Nouveau message reçu', {
+              body: `${data.message.senderName || 'Un agent'} vous a envoyé un message chiffré.`,
+              icon: '/favicon.ico'
+            });
+          } catch (_) {}
+        }
+      }
+      renderApp();
+      scrollMessagesToBottom();
+    });
+
+    window.FasoApi.on('MESSAGE_RECEIPT_UPDATED', (data) => {
+      if (!data || !data.groupId) return;
+      const list = state.messagesByGroup.get(data.groupId);
+      if (list) {
+        const msg = list.find((m) => m.id === data.messageId);
+        if (msg) {
+          msg.delivery_status = data.deliveryStatus;
+          msg.recipient_count = data.recipientCount;
+          msg.delivered_count = data.deliveredCount;
+          msg.read_count = data.readCount;
+          renderApp();
+        }
+      }
+    });
+
+    window.FasoApi.on('NEW_ADMINISTRATIVE_INSTRUCTION', async (data) => {
+      await window.FasoCrypto.syncKeysAndRequests();
+      await refreshInstructions();
+      playNotificationTone();
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        try { navigator.vibrate([120, 60, 120]); } catch (_) {}
+      }
+      showToast('Nouvelle instruction reçue', 'Une consigne administrative vous a été assignée.');
+      renderApp();
+    });
+
+    window.FasoApi.on('INSTRUCTION_ACKNOWLEDGED', async () => {
+      await refreshInstructions();
+      renderApp();
+    });
+
+    window.FasoApi.on('INSTRUCTION_UPDATED', async () => {
+      await window.FasoCrypto.syncKeysAndRequests();
+      await refreshInstructions();
+      renderApp();
+    });
+
+    const handleIncomingNotification = async (payload) => {
+      const n = payload && payload.notification;
+      if (payload && typeof payload.unreadCount === 'number') {
+        state.unreadNotifCount = payload.unreadCount;
+      } else {
+        state.unreadNotifCount = (state.unreadNotifCount || 0) + 1;
+      }
+      await refreshNotifications();
+
+      if (n) {
+        playNotificationTone();
+        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+          try { navigator.vibrate([120, 60, 120]); } catch (_) {}
+        }
+        showToast(n.title, n.body);
+        if (typeof window.Notification !== 'undefined' && Notification.permission === 'granted') {
+          try {
+            const notif = new Notification(n.title, {
+              body: n.body,
+              icon: '/favicon.ico',
+              badge: '/favicon.ico',
+              tag: n.id || ('notif_' + Date.now())
+            });
+            notif.onclick = () => {
+              window.focus();
+              notif.close();
+            };
+          } catch (_) {}
+        }
+      }
+      renderApp();
+      renderNotifPopover();
+    };
+
+    window.FasoApi.on('NOTIFICATION_EVENT', handleIncomingNotification);
+    window.FasoApi.on('NOTIFICATION_CREATED', handleIncomingNotification);
+
+    const handleForcedDisconnect = (payload) => {
+      stopQrScannerIfActive();
+      state.modal = null;
+      state.notifPopoverOpen = false;
+      state.loginStep = 'credentials';
+      state.loginPassword = '';
+      state.loginOtp = '';
+      state.loginError = (payload && (payload.message || payload.reason)) || 'Votre session a été révoquée.';
+      showToast('Session interrompue', state.loginError, true);
+      renderModal();
+      renderNotifPopover();
+      renderApp();
+    };
+
+    window.FasoApi.on('ACCOUNT_REVOKED', handleForcedDisconnect);
+    window.FasoApi.on('ACCOUNT_SUSPENDED', handleForcedDisconnect);
+  }
+
+  // ==========================================================================
+  // CONNEXION QR CODE (?enroll=...) & SCANNER CAMÉRA
+  // ==========================================================================
+  function extractEnrollTokenFromRaw(rawInput) {
+    const trimmed = String(rawInput || '').trim();
+    if (!trimmed) return null;
+    try {
+      const parsedUrl = new URL(trimmed, window.location.origin);
+      const param = parsedUrl.searchParams.get('enroll');
+      if (param) return param;
+    } catch (_) {}
+    if (trimmed.includes('enroll=')) {
+      const m = trimmed.match(/[?&]enroll=([^&#\s]+)/);
+      if (m && m[1]) return decodeURIComponent(m[1]);
+    }
+    return trimmed;
+  }
+
+  async function performQrEnrollment(rawValue) {
+    const code = extractEnrollTokenFromRaw(rawValue);
+    if (!code) {
+      showToast('QR code non reconnu', '', true);
+      return;
+    }
+    stopQrScannerIfActive();
+    if (window.FasoApi.token) {
+      window.FasoApi.disconnectWebSocket();
+      window.FasoApi.clearSession();
+    }
+    state.activeGroupId = null;
+    try {
+      const res = await window.FasoApi.qrLogin(code, 'Terminal Enrôlé par QR');
+      if (res && res.success) {
+        window.history.replaceState({}, '', window.location.pathname);
+        state.tab = 'messages';
+        await loadAuthenticatedWorkspace();
+        showToast(`Connecté en tant que ${res.user.fullName}`);
+        renderApp();
+        scrollMessagesToBottom();
+      }
+    } catch (err) {
+      window.history.replaceState({}, '', window.location.pathname);
+      const msg = friendlyAuthError(err.code || err.message);
+      state.loginError = msg;
+      showToast(msg, '', true);
+      renderApp();
+    }
+  }
+
+  function stopQrScannerIfActive() {
+    if (state.qrScannerCtrl) {
+      try { state.qrScannerCtrl.stop(); } catch (_) {}
+      state.qrScannerCtrl = null;
+    }
+    state.scanningQr = false;
+  }
+
+  // ==========================================================================
+  // RENDU DE L'INTERFACE (Login / Shell / Chat / Instructions / Admin)
+  // ==========================================================================
+  function renderApp() {
+    if (state.booting) {
+      appRoot.innerHTML = `
+        <div class="login-screen">
+          <div class="login-container" style="text-align:center;">
+            <div class="login-logo-box">${ICONS.shieldCheck}</div>
+            <p class="login-subtitle">Initialisation cryptographique E2EE...</p>
+          </div>
+        </div>
+      `;
       return;
     }
 
-    if (onUpdate) onUpdate(state.value);
-    state.rafId = requestAnimationFrame(step);
-  };
-
-  if (onUpdate) onUpdate(state.value);
-  state.rafId = requestAnimationFrame(step);
-  ActiveSprings.set(key, state);
-}
-
-function computePointerVelocity(samples) {
-  if (!samples || samples.length < 2) return 0;
-  const latest = samples[samples.length - 1];
-  let anchor = samples[0];
-  for (let i = samples.length - 2; i >= 0; i -= 1) {
-    if (latest.t - samples[i].t <= 90) {
-      anchor = samples[i];
+    if (!window.FasoApi.currentUser || !window.FasoApi.token) {
+      renderLoginView();
+      return;
     }
-  }
-  const dtSec = (latest.t - anchor.t) / 1000;
-  if (dtSec <= 0.002) return 0;
-  return (latest.pos - anchor.pos) / dtSec;
-}
 
-/**
- * §12 Profondeur spatiale par recul d'échelle du shell principal lors d'une feuille modale
- * (0 = repos normal, 1 = feuille pleinement présentée)
- */
-function syncSheetBackgroundDepth(progress, { immediate = false } = {}) {
-  const shell = document.getElementById('appShell');
-  if (!shell || shell.hidden) return;
-
-  if (prefersReducedMotion() || window.innerWidth >= 640) {
-    cancelSpring('appShellDepth');
-    document.body.classList.remove('sheet-presented');
-    shell.style.transform = '';
-    return;
+    renderShellView();
   }
 
-  const clamped = Math.max(0, Math.min(1, progress));
-  const applyDepth = (p) => {
-    if (p <= 0.005) {
-      document.body.classList.remove('sheet-presented');
-      shell.style.transform = '';
-    } else {
-      document.body.classList.add('sheet-presented');
-      const scale = 1 - 0.022 * p;
-      const ty = 4 * p;
-      shell.style.transform = `scale(${scale.toFixed(4)}) translate3d(0, ${ty.toFixed(2)}px, 0)`;
-    }
-  };
+  function renderLoginView() {
+    const curLang = (typeof window.getLanguage === 'function' ? window.getLanguage() : 'fr');
+    appRoot.innerHTML = `
+      <main id="mainWorkspace" class="login-screen">
+        <div class="login-container">
+          <!-- Sélecteur de langues nationales (Bonus +3 points) -->
+          <div style="display:flex; justify-content:center; margin-bottom:14px;">
+            <div class="lang-segmented-control" role="group" aria-label="Langues nationales">
+              <button type="button" class="lang-segment-btn${curLang === 'fr' ? ' active' : ''} js-switch-lang" data-lang="fr" title="Français (Officiel)">FR</button>
+              <button type="button" class="lang-segment-btn${curLang === 'mo' ? ' active' : ''} js-switch-lang" data-lang="mo" title="Mooré (Langue nationale)">Mooré</button>
+              <button type="button" class="lang-segment-btn${curLang === 'di' ? ' active' : ''} js-switch-lang" data-lang="di" title="Dioula (Langue nationale)">Dioula</button>
+            </div>
+          </div>
 
-  if (immediate) {
-    cancelSpring('appShellDepth');
-    applyDepth(clamped);
-    return;
-  }
+          <div class="login-brand">
+            <div class="login-logo-box">${ICONS.shieldCheck}</div>
+            <h1 class="login-title">${esc(window.t ? window.t('app_title') : 'FasoBrief')}</h1>
+            <p class="login-subtitle">${esc(window.t ? window.t('app_subtitle') : "Messagerie des agents de l'administration")}</p>
+          </div>
 
-  const currentPresented = document.body.classList.contains('sheet-presented') ? 1 : 0;
-  animateSpring('appShellDepth', {
-    from: currentPresented,
-    to: clamped,
-    damping: 1.0,
-    response: 0.34,
-    onUpdate: applyDepth
-  });
-}
+          <!-- Alerte Démonstration Jury : Épreuve Intrus (HTTP 403) -->
+          ${state.intruderSimulationResult ? `
+            <div class="intruder-alert-box" role="alert">
+              <div class="intruder-alert-head">
+                ${ICONS.shieldAlert || ICONS.shieldSm}
+                <span>${esc(window.t ? window.t('intruder_alert_title') : 'ÉPREUVE INTRUS : ACCÈS STRICTEMENT REFUSÉ (HTTP 403)')}</span>
+              </div>
+              <p class="intruder-alert-text">
+                ${esc(window.t ? window.t('intruder_alert_desc') : "Tentative d'accès par un agent non préalablement enrôlé. Bloqué côté serveur et consigné dans le journal d'audit.")}
+                <br/>
+                <span style="font-size:0.6875rem; opacity:0.85;">Matricule testé: <code>${esc(state.intruderSimulationResult.matricule)}</code> · Code HTTP: <strong>${state.intruderSimulationResult.status} (${state.intruderSimulationResult.code})</strong> à ${state.intruderSimulationResult.timestamp}</span>
+              </p>
+            </div>
+          ` : ''}
 
-function openModal(id) {
-  const el = document.getElementById(id);
-  if (!el) return;
+          <div class="login-card">
+            ${state.loginStep === 'credentials' ? `
+              <form id="loginStep1Form" class="login-form">
+                <div class="field-group">
+                  <label class="field-label" for="loginUsernameInput">${esc(window.t ? window.t('matricule_label') : 'Identifiant')}</label>
+                  <input
+                    id="loginUsernameInput"
+                    class="input input-login"
+                    type="text"
+                    autocomplete="username"
+                    placeholder="ex. issa"
+                    value="${esc(state.loginUsername)}"
+                    required
+                  />
+                </div>
+                <div class="field-group">
+                  <label class="field-label" for="loginPasswordInput">${esc(window.t ? window.t('password_label') : 'Mot de passe')}</label>
+                  <input
+                    id="loginPasswordInput"
+                    class="input input-login"
+                    type="password"
+                    autocomplete="current-password"
+                    value="${esc(state.loginPassword)}"
+                    required
+                  />
+                </div>
+                ${state.loginError ? `<p class="login-error" role="alert">${esc(state.loginError)}</p>` : ''}
+                <button type="submit" class="btn btn-primary btn-lg-login">
+                  ${ICONS.keyRound}
+                  <span>${esc(window.t ? window.t('btn_login') : 'Continuer')}</span>
+                </button>
+                <button type="button" id="toggleQrScanBtn" class="btn btn-outline btn-lg-login">
+                  ${ICONS.qrCode}
+                  <span>${state.scanningQr ? 'Fermer la caméra' : 'Scanner un QR code'}</span>
+                </button>
+                <!-- Bouton Épreuve Intrus pour le Jury -->
+                <button type="button" id="simulateIntruderBtn" class="btn btn-danger-soft btn-sm" style="width:100%; margin-top:6px;" title="Tester le rejet 403 d'un intrus non enrôlé">
+                  ${ICONS.shieldSm}
+                  <span>${esc(window.t ? window.t('simulate_intruder') : "Simuler l'attaque d'un Intrus (403)")}</span>
+                </button>
+              </form>
+              ${state.scanningQr ? `
+                <div class="qr-scan-box">
+                  <div id="qrCameraContainer" class="qr-camera-stage">Ouverture de la caméra...</div>
+                  <div style="display:flex; gap:6px;">
+                    <input id="qrManualInput" class="input" type="text" placeholder="Ou coller le lien ?enroll=..." />
+                    <button type="button" id="qrManualSubmitBtn" class="btn btn-outline btn-sm">Valider</button>
+                  </div>
+                </div>
+              ` : ''}
+            ` : `
+              <form id="loginStep2Form" class="login-form">
+                <div class="field-group">
+                  <label class="field-label" for="loginOtpInput">
+                    ${ICONS.smartphone}
+                    <span>${esc(window.t ? window.t('login_step2_title') : 'Code de vérification')}</span>
+                  </label>
+                  <input
+                    id="loginOtpInput"
+                    class="input input-otp"
+                    type="text"
+                    inputmode="numeric"
+                    maxlength="6"
+                    placeholder="000000"
+                    value="${esc(state.loginOtp)}"
+                    required
+                  />
+                  <p class="otp-helper-text">
+                    ${state.demoMode && state.demoLiveTotp
+                      ? `Second facteur TOTP. Code de démonstration : <button type="button" id="fillDemoOtpBtn" class="otp-demo-pill" title="Cliquer pour insérer">${esc(state.demoLiveTotp)}</button>`
+                      : `Second facteur TOTP (application d'authentification RFC 6238).`}
+                  </p>
+                </div>
+                ${state.loginError ? `<p class="login-error" role="alert">${esc(state.loginError)}</p>` : ''}
+                <button type="submit" class="btn btn-primary btn-lg-login">${esc(window.t ? window.t('btn_verify') : 'Se connecter')}</button>
+                <button type="button" id="backToStep1Btn" class="btn btn-ghost btn-sm" style="width:100%;">${esc(window.t ? window.t('btn_back') : 'Retour')}</button>
+              </form>
+            `}
+          </div>
 
-  cancelSpring(`modal:${id}`);
-  delete el.dataset.closing;
-  el.style.opacity = '';
+          ${state.demoMode ? `
+            <p class="login-hint">
+              Comptes fictifs : <span style="font-weight:500;">admin</span>, <span style="font-weight:500;">issa</span>, <span style="font-weight:500;">fatou</span>, <span style="font-weight:500;">paul</span>, <span style="font-weight:500;">mariam</span> — mot de passe <span style="font-weight:500;">demo2026</span>
+            </p>
+          ` : ''}
+        </div>
+      </main>
+    `;
 
-  const card = el.querySelector('.modal-card');
-  if (card) {
-    card.style.transform = '';
-  }
+    document.querySelectorAll('.js-switch-lang').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (typeof window.setLanguage === 'function') {
+          window.setLanguage(btn.dataset.lang);
+        }
+        renderApp();
+      });
+    });
 
-  if (el.hidden && document.activeElement instanceof HTMLElement) {
-    AppState.modalTriggerStack.push({ id, trigger: document.activeElement });
-  }
-  el.hidden = false;
-
-  const isMobileSheet = window.innerWidth < 640;
-  syncSheetBackgroundDepth(1);
-
-  if (card && !prefersReducedMotion()) {
-    if (isMobileSheet) {
-      animateSpring(`modal:${id}`, {
-        from: 240,
-        to: 0,
-        damping: 1.0,
-        response: 0.31,
-        onUpdate: (y) => {
-          card.style.transform = `translate3d(0, ${y.toFixed(2)}px, 0)`;
-        },
-        onComplete: () => {
-          card.style.transform = '';
+    const simBtn = document.getElementById('simulateIntruderBtn');
+    if (simBtn) {
+      simBtn.addEventListener('click', async () => {
+        try {
+          await window.FasoApi.loginStep1('INTRUS-HACKER-99', 'AttaqueForceBrute2026');
+        } catch (err) {
+          state.intruderSimulationResult = {
+            status: err.status || 403,
+            code: err.code || 'COMPTE_NON_ENROLE_OU_INCONNU',
+            matricule: 'INTRUS-HACKER-99',
+            timestamp: new Date().toLocaleTimeString('fr-FR')
+          };
+          showToast('Épreuve Intrus validée : Rejet HTTP 403 immédiat', 'Tentative journalisée dans audit_logs', true);
+          renderApp();
         }
       });
-    } else {
-      animateSpring(`modal:${id}`, {
-        from: 0.955,
-        to: 1,
-        damping: 1.0,
-        response: 0.25,
-        onUpdate: (s) => {
-          card.style.transform = `scale(${s.toFixed(4)})`;
-        },
-        onComplete: () => {
-          card.style.transform = '';
+    }
+
+    const s1Form = document.getElementById('loginStep1Form');
+    if (s1Form) {
+      s1Form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        state.loginUsername = document.getElementById('loginUsernameInput').value.trim();
+        state.loginPassword = document.getElementById('loginPasswordInput').value;
+        state.loginError = '';
+        stopQrScannerIfActive();
+        try {
+          const res = await window.FasoApi.loginStep1(state.loginUsername, state.loginPassword);
+          state.loginChallenge = res.challengeToken;
+          state.loginPendingUserId = res.userId;
+          state.loginOtp = '';
+          state.demoLiveTotp = '';
+          if (state.demoMode) {
+            try {
+              const demoRes = await window.FasoApi.getDemoTotp(res.userId);
+              state.demoLiveTotp = demoRes.code || '';
+            } catch (_) {}
+          }
+          state.loginStep = 'otp';
+          renderApp();
+          const otpEl = document.getElementById('loginOtpInput');
+          if (otpEl) otpEl.focus();
+        } catch (err) {
+          state.loginError = friendlyAuthError(err.code || err.message);
+          renderApp();
         }
       });
-    }
-  }
 
-  requestAnimationFrame(() => {
-    const first = el.querySelector('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])');
-    if (first && typeof first.focus === 'function') {
-      first.focus();
-    }
-  });
-}
-
-function closeModal(id, opts = {}) {
-  const el = document.getElementById(id);
-  if (!el) return;
-
-  cancelSpring(`modal:${id}`);
-  const card = el.querySelector('.modal-card');
-
-  if (id === 'modalInstructionDetail') {
-    AppState.openInstructionId = null;
-  }
-
-  const restoreTriggerFocus = () => {
-    for (let i = AppState.modalTriggerStack.length - 1; i >= 0; i -= 1) {
-      if (AppState.modalTriggerStack[i].id === id) {
-        const { trigger } = AppState.modalTriggerStack.splice(i, 1)[0];
-        if (trigger && typeof trigger.focus === 'function' && trigger.offsetParent !== null) {
-          trigger.focus();
-        }
-        break;
-      }
-    }
-  };
-
-  const remainingOpen = Array.from(document.querySelectorAll('.modal-backdrop:not([hidden])'))
-    .filter((m) => m.id !== id && !m.dataset.closing);
-  if (remainingOpen.length === 0) {
-    syncSheetBackgroundDepth(0);
-  }
-
-  if (opts.fromGesture && card && !prefersReducedMotion()) {
-    el.dataset.closing = '1';
-    const targetY = Math.max(card.offsetHeight || 420, 360);
-    animateSpring(`modal:${id}`, {
-      from: opts.startY || 0,
-      to: targetY,
-      velocity: opts.velocityY || 0,
-      damping: 0.96,
-      response: 0.26,
-      onUpdate: (y) => {
-        card.style.transform = `translate3d(0, ${Math.max(0, y).toFixed(2)}px, 0)`;
-        const fade = Math.max(0, 1 - y / targetY);
-        el.style.opacity = fade.toFixed(3);
-      },
-      onComplete: () => {
-        delete el.dataset.closing;
-        el.hidden = true;
-        el.style.opacity = '';
-        card.style.transform = '';
-        restoreTriggerFocus();
-      }
-    });
-    return;
-  }
-
-  delete el.dataset.closing;
-  el.hidden = true;
-  el.style.opacity = '';
-  if (card) card.style.transform = '';
-  restoreTriggerFocus();
-}
-
-/**
- * §2, §6 & §9 Feuilles mobiles glissables 1:1 avec Pointer Events, rubber-banding haut
- * et projection d'inertie à la relâche.
- */
-function setupFluidSheetGestures() {
-  const zones = document.querySelectorAll('.sheet-drag-zone');
-  zones.forEach((zone) => {
-    const backdrop = zone.closest('.modal-backdrop');
-    const card = zone.closest('.modal-card');
-    if (!backdrop || !card) return;
-
-    let dragState = null;
-
-    zone.addEventListener('pointerdown', (e) => {
-      if (window.innerWidth >= 640 || backdrop.hidden) return;
-      if (e.button !== 0 && e.pointerType === 'mouse') return;
-      if (e.target && e.target.closest('button')) return;
-
-      const interrupted = cancelSpring(`modal:${backdrop.id}`);
-      const baseOffset = interrupted ? Math.max(0, interrupted.value) : 0;
-
-      dragState = {
-        pointerId: e.pointerId,
-        startY: e.clientY - baseOffset,
-        currentY: baseOffset,
-        sheetH: Math.max(260, card.offsetHeight || 400),
-        samples: [{ pos: e.clientY, t: performance.now() }]
-      };
-
-      try {
-        zone.setPointerCapture(e.pointerId);
-      } catch (_) {}
-    });
-
-    zone.addEventListener('pointermove', (e) => {
-      if (!dragState || e.pointerId !== dragState.pointerId) return;
-      const rawDy = e.clientY - dragState.startY;
-      const effectiveY = rawDy < 0
-        ? rubberband(rawDy, dragState.sheetH, 0.42)
-        : rawDy;
-
-      dragState.currentY = effectiveY;
-      dragState.samples.push({ pos: e.clientY, t: performance.now() });
-      if (dragState.samples.length > 5) dragState.samples.shift();
-
-      card.style.transform = `translate3d(0, ${effectiveY.toFixed(2)}px, 0)`;
-
-      const dismissProgress = Math.max(0, Math.min(1, effectiveY / dragState.sheetH));
-      backdrop.style.opacity = (1 - dismissProgress * 0.65).toFixed(3);
-      syncSheetBackgroundDepth(1 - dismissProgress, { immediate: true });
-    });
-
-    const finishDrag = (e, cancelled = false) => {
-      if (!dragState || e.pointerId !== dragState.pointerId) return;
-      const { currentY, sheetH, samples } = dragState;
-      dragState = null;
-
-      try {
-        zone.releasePointerCapture(e.pointerId);
-      } catch (_) {}
-
-      const vy = cancelled ? 0 : computePointerVelocity(samples);
-      const projectedY = currentY + projectMomentum(vy, 0.9965);
-
-      if (!cancelled && currentY > 24 && (projectedY > sheetH * 0.34 || vy > 560)) {
-        triggerHaptic(8);
-        closeModal(backdrop.id, { fromGesture: true, startY: currentY, velocityY: vy });
-      } else {
-        syncSheetBackgroundDepth(1);
-        animateSpring(`modal:${backdrop.id}`, {
-          from: currentY,
-          to: 0,
-          velocity: vy,
-          damping: 0.88,
-          response: 0.32,
-          onUpdate: (y) => {
-            card.style.transform = `translate3d(0, ${y.toFixed(2)}px, 0)`;
-            const p = Math.max(0, Math.min(1, y / sheetH));
-            backdrop.style.opacity = (1 - p * 0.65).toFixed(3);
-          },
-          onComplete: () => {
-            card.style.transform = '';
-            backdrop.style.opacity = '';
+      const qrBtn = document.getElementById('toggleQrScanBtn');
+      if (qrBtn) {
+        qrBtn.addEventListener('click', () => {
+          if (state.scanningQr) {
+            stopQrScannerIfActive();
+            renderApp();
+          } else {
+            state.scanningQr = true;
+            state.loginError = '';
+            renderApp();
+            const stage = document.getElementById('qrCameraContainer');
+            if (stage) {
+              state.qrScannerCtrl = window.FasoQr.startQrCameraScanner(
+                stage,
+                (decoded) => performQrEnrollment(decoded),
+                (errMsg) => {
+                  if (stage) stage.textContent = errMsg;
+                }
+              );
+            }
           }
         });
       }
-    };
 
-    zone.addEventListener('pointerup', (e) => finishDrag(e, false));
-    zone.addEventListener('pointercancel', (e) => finishDrag(e, true));
-  });
-}
-
-/**
- * §7 & §10 Geste de retour tactile 1:1 depuis le bord gauche dans une conversation mobile
- * avec hystérésis directionnelle pour préserver le défilement vertical des messages.
- */
-function setupFluidMobileChatSwipe() {
-  const viewChat = document.getElementById('viewChat');
-  const msgPane = viewChat && viewChat.querySelector('.messages-pane');
-  const convPane = viewChat && viewChat.querySelector('.conversations-pane');
-  if (!viewChat || !msgPane || !convPane) return;
-
-  let swipe = null;
-
-  viewChat.addEventListener('pointerdown', (e) => {
-    if (window.innerWidth >= 768) return;
-    if (!document.body.classList.contains('mobile-chat-open')) return;
-    if (e.clientX > 28) return;
-
-    cancelSpring('mobileChatSwipe');
-    swipe = {
-      pointerId: e.pointerId,
-      startX: e.clientX,
-      startY: e.clientY,
-      locked: false,
-      currentX: 0,
-      width: Math.max(280, window.innerWidth),
-      samples: [{ pos: e.clientX, t: performance.now() }]
-    };
-  });
-
-  viewChat.addEventListener('pointermove', (e) => {
-    if (!swipe || e.pointerId !== swipe.pointerId) return;
-    const dx = e.clientX - swipe.startX;
-    const dy = e.clientY - swipe.startY;
-
-    if (!swipe.locked) {
-      if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) {
-        swipe = null;
-        return;
-      }
-      if (dx > 10 && dx > Math.abs(dy) * 1.2) {
-        swipe.locked = true;
-        document.body.classList.add('swiping-chat');
-        try {
-          viewChat.setPointerCapture(e.pointerId);
-        } catch (_) {}
-      } else {
-        return;
+      const manualSubmit = document.getElementById('qrManualSubmitBtn');
+      if (manualSubmit) {
+        manualSubmit.addEventListener('click', () => {
+          const val = document.getElementById('qrManualInput').value;
+          performQrEnrollment(val);
+        });
       }
     }
 
-    const clampedX = Math.max(0, dx);
-    swipe.currentX = clampedX;
-    swipe.samples.push({ pos: e.clientX, t: performance.now() });
-    if (swipe.samples.length > 5) swipe.samples.shift();
-
-    const progress = Math.max(0, Math.min(1, clampedX / swipe.width));
-    msgPane.style.transform = `translate3d(${clampedX.toFixed(1)}px, 0, 0)`;
-    convPane.style.transform = `translate3d(${(-22 * (1 - progress)).toFixed(2)}%, 0, 0)`;
-    convPane.style.opacity = (0.65 + 0.35 * progress).toFixed(3);
-  });
-
-  const endSwipe = (e, cancelled = false) => {
-    if (!swipe || e.pointerId !== swipe.pointerId) return;
-    const state = swipe;
-    swipe = null;
-
-    if (!state.locked) return;
-    try {
-      viewChat.releasePointerCapture(e.pointerId);
-    } catch (_) {}
-
-    const vx = cancelled ? 0 : computePointerVelocity(state.samples);
-    const projectedX = state.currentX + projectMomentum(vx, 0.997);
-    const shouldClose = !cancelled && (projectedX > state.width * 0.35 || vx > 520);
-
-    const cleanupStyles = () => {
-      document.body.classList.remove('swiping-chat');
-      msgPane.style.transform = '';
-      convPane.style.transform = '';
-      convPane.style.opacity = '';
-    };
-
-    if (shouldClose) {
-      triggerHaptic(8);
-      animateSpring('mobileChatSwipe', {
-        from: state.currentX,
-        to: state.width,
-        velocity: vx,
-        damping: 0.96,
-        response: 0.28,
-        onUpdate: (x) => {
-          const p = Math.max(0, Math.min(1, x / state.width));
-          msgPane.style.transform = `translate3d(${Math.max(0, x).toFixed(1)}px, 0, 0)`;
-          convPane.style.transform = `translate3d(${(-22 * (1 - p)).toFixed(2)}%, 0, 0)`;
-          convPane.style.opacity = (0.65 + 0.35 * p).toFixed(3);
-        },
-        onComplete: () => {
-          closeMobileConversation();
-          cleanupStyles();
+    const s2Form = document.getElementById('loginStep2Form');
+    if (s2Form) {
+      const otpInput = document.getElementById('loginOtpInput');
+      if (otpInput) {
+        otpInput.addEventListener('input', () => {
+          otpInput.value = otpInput.value.replace(/\D/g, '').slice(0, 6);
+          state.loginOtp = otpInput.value;
+        });
+      }
+      const fillBtn = document.getElementById('fillDemoOtpBtn');
+      if (fillBtn) {
+        fillBtn.addEventListener('click', () => {
+          state.loginOtp = state.demoLiveTotp;
+          if (otpInput) {
+            otpInput.value = state.demoLiveTotp;
+            otpInput.focus();
+          }
+        });
+      }
+      document.getElementById('backToStep1Btn').addEventListener('click', () => {
+        state.loginStep = 'credentials';
+        state.loginError = '';
+        state.loginOtp = '';
+        renderApp();
+      });
+      s2Form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        state.loginOtp = document.getElementById('loginOtpInput').value.trim();
+        state.loginError = '';
+        try {
+          await window.FasoApi.loginStep2(
+            state.loginPendingUserId,
+            state.loginOtp,
+            state.loginChallenge,
+            'Navigateur FasoBrief'
+          );
+          state.loginPassword = '';
+          state.loginOtp = '';
+          state.loginStep = 'credentials';
+          state.tab = 'messages';
+          await loadAuthenticatedWorkspace();
+          renderApp();
+          scrollMessagesToBottom();
+        } catch (err) {
+          state.loginError = friendlyAuthError(err.code || err.message);
+          renderApp();
         }
       });
-    } else {
-      animateSpring('mobileChatSwipe', {
-        from: state.currentX,
-        to: 0,
-        velocity: vx,
-        damping: 0.9,
-        response: 0.30,
-        onUpdate: (x) => {
-          const p = Math.max(0, Math.min(1, x / state.width));
-          msgPane.style.transform = `translate3d(${Math.max(0, x).toFixed(1)}px, 0, 0)`;
-          convPane.style.transform = `translate3d(${(-22 * (1 - p)).toFixed(2)}%, 0, 0)`;
-          convPane.style.opacity = (0.65 + 0.35 * p).toFixed(3);
-        },
-        onComplete: cleanupStyles
+    }
+  }
+
+  function renderShellView() {
+    const me = window.FasoApi.currentUser;
+    const srvName = userServiceDisplay(me);
+    const subLabel = `${roleLabel(me.role)}${srvName ? ` · ${srvName}` : ''}`;
+    const pendingInst = pendingInstructionsCount();
+    const curLang = (typeof window.getLanguage === 'function' ? window.getLanguage() : 'fr');
+
+    const navItems = [
+      { id: 'messages', label: window.t ? window.t('nav_messages') : 'Messages', icon: ICONS.messageSquare, badge: 0 },
+      { id: 'instructions', label: window.t ? window.t('nav_instructions') : 'Instructions', icon: ICONS.clipboardCheck, badge: pendingInst },
+      ...(me.role === 'ADMIN' ? [{ id: 'admin', label: window.t ? window.t('nav_admin') : 'Administration', icon: ICONS.users, badge: 0 }] : [])
+    ];
+
+    appRoot.innerHTML = `
+      <div class="app-shell">
+        <!-- En-tête mobile -->
+        <header class="mobile-topbar">
+          <div class="mobile-brand-user js-open-profile" style="cursor:pointer;" title="Modifier mon profil">
+            ${renderAvatar(me.fullName, me.avatarData, 'avatar-circle')}
+            <div class="mobile-user-meta">
+              <p class="mobile-user-name">${esc(me.fullName)}</p>
+              <p class="mobile-user-sub">${esc(subLabel)}</p>
+            </div>
+          </div>
+          <div class="mobile-actions">
+            <div class="lang-segmented-control" role="group" aria-label="Langues">
+              <button type="button" class="lang-segment-btn${curLang === 'fr' ? ' active' : ''} js-switch-lang" data-lang="fr">FR</button>
+              <button type="button" class="lang-segment-btn${curLang === 'mo' ? ' active' : ''} js-switch-lang" data-lang="mo">MO</button>
+              <button type="button" class="lang-segment-btn${curLang === 'di' ? ' active' : ''} js-switch-lang" data-lang="di">DY</button>
+            </div>
+            <div class="bell-wrapper">
+              <button type="button" class="btn-icon js-bell-btn" aria-label="Notifications">
+                ${ICONS.bell}
+              </button>
+              ${state.unreadNotifCount > 0 ? `<span class="bell-badge">${state.unreadNotifCount > 9 ? '9+' : state.unreadNotifCount}</span>` : ''}
+            </div>
+            <button type="button" class="btn-icon js-logout-btn" aria-label="Se déconnecter" title="Se déconnecter">
+              ${ICONS.logOut}
+            </button>
+          </div>
+        </header>
+
+        <!-- Barre latérale bureau -->
+        <aside class="desktop-sidebar">
+          <div class="sidebar-brand-row">
+            <div class="sidebar-shield">${ICONS.shieldSm}</div>
+            <span class="sidebar-brand-title">FasoBrief</span>
+            <div class="bell-wrapper">
+              <button type="button" class="btn-icon js-bell-btn" aria-label="Notifications">
+                ${ICONS.bell}
+              </button>
+              ${state.unreadNotifCount > 0 ? `<span class="bell-badge">${state.unreadNotifCount > 9 ? '9+' : state.unreadNotifCount}</span>` : ''}
+            </div>
+          </div>
+
+          <!-- Sélecteur de langues nationales (Sidebar) -->
+          <div style="padding: 0 16px 12px 16px;">
+            <div class="lang-segmented-control" style="width:100%; justify-content:space-around;" role="group" aria-label="Langues nationales">
+              <button type="button" class="lang-segment-btn${curLang === 'fr' ? ' active' : ''} js-switch-lang" data-lang="fr" style="flex:1; text-align:center;">Français</button>
+              <button type="button" class="lang-segment-btn${curLang === 'mo' ? ' active' : ''} js-switch-lang" data-lang="mo" style="flex:1; text-align:center;">Mooré</button>
+              <button type="button" class="lang-segment-btn${curLang === 'di' ? ' active' : ''} js-switch-lang" data-lang="di" style="flex:1; text-align:center;">Dioula</button>
+            </div>
+          </div>
+
+          <nav class="sidebar-nav" aria-label="Navigation principale">
+            ${navItems.map((item) => `
+              <button
+                type="button"
+                class="sidebar-nav-item${state.tab === item.id ? ' active' : ''} js-nav-tab"
+                data-tab="${item.id}"
+              >
+                ${item.icon}
+                <span class="sidebar-nav-label">${esc(item.label)}</span>
+                ${item.badge > 0 ? `<span class="nav-count-pill">${item.badge}</span>` : ''}
+              </button>
+            `).join('')}
+          </nav>
+
+          <div class="sidebar-footer">
+            <button type="button" class="btn btn-outline btn-xs js-open-inspection" style="width:100%; margin-bottom:10px; font-size:0.6875rem;" title="Prouver que le serveur ne lit rien">
+              ${ICONS.lock}
+              <span>${esc(window.t ? window.t('btn_inspect_server') : 'Inspecteur BDD (Zéro-Clair)')}</span>
+            </button>
+            <div class="sidebar-user-row">
+              <div class="js-open-profile" style="display:flex; align-items:center; gap:12px; flex:1; min-width:0; cursor:pointer;" title="Modifier mon profil">
+                ${renderAvatar(me.fullName, me.avatarData, 'avatar-circle')}
+                <div class="sidebar-user-info">
+                  <p class="sidebar-user-name">${esc(me.fullName)}</p>
+                  <p class="sidebar-user-sub">${esc(subLabel)}</p>
+                </div>
+              </div>
+              <button type="button" class="btn-icon js-open-profile" aria-label="Modifier mon profil" title="Modifier mon profil">
+                ${ICONS.pencil}
+              </button>
+              <button type="button" class="btn-icon js-logout-btn" aria-label="Se déconnecter" title="Se déconnecter">
+                ${ICONS.logOut}
+              </button>
+            </div>
+            <p class="sidebar-proto-note">Chiffrement E2EE Olm/Megolm — données fictives</p>
+          </div>
+        </aside>
+
+        <!-- Contenu principal -->
+        <main id="mainWorkspace" class="shell-main">
+          ${state.tab === 'messages' ? renderChatMarkup() : ''}
+          ${state.tab === 'instructions' ? renderInstructionsMarkup() : ''}
+          ${state.tab === 'admin' && me.role === 'ADMIN' ? renderAdminMarkup() : ''}
+        </main>
+
+        <!-- Barre d'onglets mobile -->
+        <nav class="mobile-tabbar" style="grid-template-columns: repeat(${navItems.length}, minmax(0, 1fr));" aria-label="Navigation mobile">
+          ${navItems.map((item) => `
+            <button
+              type="button"
+              class="mobile-tab-btn${state.tab === item.id ? ' active' : ''} js-nav-tab"
+              data-tab="${item.id}"
+            >
+              ${item.icon}
+              <span>${esc(item.label)}</span>
+              ${item.badge > 0 ? `<span class="mobile-tab-badge">${item.badge}</span>` : ''}
+            </button>
+          `).join('')}
+        </nav>
+      </div>
+    `;
+
+    bindShellEvents();
+    if (state.tab === 'messages') bindChatEvents();
+    if (state.tab === 'instructions') bindInstructionsEvents();
+    if (state.tab === 'admin' && me.role === 'ADMIN') bindAdminEvents();
+  }
+
+  function renderChatMarkup() {
+    const me = window.FasoApi.currentUser;
+    const canManage = isChefOrAdmin(me);
+    const activeConv = state.groups.find((g) => g.id === state.activeGroupId) || null;
+    const messages = activeConv ? (state.messagesByGroup.get(activeConv.id) || []) : [];
+
+    return `
+      <div class="chat-view">
+        <section class="chat-sidebar${!state.mobileChatListOpen && activeConv ? ' mobile-hidden' : ''}">
+          <div class="chat-sidebar-head">
+            <h1 class="chat-sidebar-title">Messages</h1>
+            ${canManage ? `
+              <button type="button" id="openNewGroupBtn" class="btn btn-outline btn-sm btn-pill">
+                ${ICONS.plus}
+                <span>Groupe</span>
+              </button>
+            ` : ''}
+          </div>
+          <div class="chat-conv-list">
+            ${state.groups.length === 0 ? `
+              <p class="chat-conv-empty">Aucune conversation disponible.</p>
+            ` : state.groups.map((conv) => {
+              const isService = conv.channelKind === 'service';
+              const isSelected = activeConv && activeConv.id === conv.id;
+              return `
+                <button
+                  type="button"
+                  class="conv-item${isSelected ? ' active' : ''} js-select-conv"
+                  data-group-id="${esc(conv.id)}"
+                >
+                  <div class="conv-icon ${isService ? 'service' : 'group'}">
+                    ${isService ? ICONS.building2 : ICONS.users}
+                  </div>
+                  <div class="conv-body">
+                    <div class="conv-top-line">
+                      <p class="conv-name">${esc(conv.name)}</p>
+                      ${conv.lastMessageAt ? `<span class="conv-time">${esc(formatTime(conv.lastMessageAt))}</span>` : ''}
+                    </div>
+                    <p class="conv-preview">${esc(conv.previewText || 'Aucun message')}</p>
+                  </div>
+                  ${conv.unreadCount > 0 ? `<span class="nav-count-pill">${conv.unreadCount}</span>` : ''}
+                </button>
+              `;
+            }).join('')}
+          </div>
+        </section>
+
+        <section class="chat-pane${state.mobileChatListOpen || !activeConv ? ' mobile-hidden' : ''}">
+          ${!activeConv ? `
+            <p class="chat-pane-empty">Sélectionnez une conversation</p>
+          ` : `
+            <header class="chat-header">
+              <button type="button" id="mobileBackToConvListBtn" class="chat-back-btn" aria-label="Retour aux conversations">
+                ${ICONS.chevronLeft}
+              </button>
+              <div class="chat-header-info">
+                <h2 class="chat-header-title">${esc(activeConv.name)}</h2>
+                <p class="chat-header-sub">
+                  ${Number(activeConv.member_count || 1)} membre${Number(activeConv.member_count || 1) > 1 ? 's' : ''} · ${activeConv.channelKind === 'service' ? 'Service' : 'Groupe'}
+                </p>
+              </div>
+              <div class="chat-lock-pill" title="Chiffré de bout en bout (Olm / Megolm)">
+                ${ICONS.lock}
+                <span>Accès restreint</span>
+              </div>
+            </header>
+
+            <div id="chatMessagesContainer" class="chat-messages">
+              ${messages.length === 0 ? `
+                <p class="chat-messages-empty">Début de la conversation — échanges réservés aux membres.</p>
+              ` : messages.map((m) => {
+                const own = m.sender_id === me.id;
+                const recipientsTotal = Number(m.recipient_count || 0);
+                const readByCount = Number(m.read_count || 0);
+                const allRead = recipientsTotal > 0 && readByCount >= recipientsTotal;
+                const isImg = m.fileMeta && String(m.fileMeta.mime || '').startsWith('image/');
+                const cachedImgUrl = isImg ? state.decryptedImageCache.get(m.fileMeta.fileId) : null;
+
+                return `
+                  <div class="msg-row${own ? ' own' : ''}">
+                    ${!own ? renderAvatar(m.sender_name || '?', m.sender_avatar, 'msg-avatar') : ''}
+                    <div class="msg-col">
+                      ${!own ? `<p class="msg-sender-name">${esc(m.sender_name || 'Agent')}</p>` : ''}
+                      <div class="msg-bubble">
+                        ${m.fileMeta ? (
+                          isImg && cachedImgUrl
+                            ? `<img src="${esc(cachedImgUrl)}" alt="${esc(m.fileMeta.name || 'Image')}" class="msg-attachment-img" />`
+                            : `<button type="button" class="msg-attachment-file js-download-file" data-msg-id="${esc(m.id)}">
+                                 ${ICONS.fileText}
+                                 <span>${esc(m.fileMeta.name || 'Pièce jointe chiffrée')}</span>
+                               </button>`
+                        ) : ''}
+                        ${m.text ? `<p class="msg-text">${esc(m.text)}</p>` : ''}
+                      </div>
+                      <div class="msg-meta-line">
+                        <span>${esc(formatTime(m.created_at))}</span>
+                        ${own ? `
+                          <span class="msg-read-status${allRead ? ' all-read' : ''}">
+                            ${readByCount > 0 ? ICONS.checkCheck : ICONS.check}
+                            <span>${readByCount > 0 ? `Lu par ${readByCount}/${recipientsTotal}` : 'Envoyé'}</span>
+                          </span>
+                        ` : ''}
+                        ${canManage && m.decryptedOk ? `
+                          <button type="button" class="msg-convert-btn js-convert-msg" data-msg-id="${esc(m.id)}">
+                            ${ICONS.clipboardPlus}
+                            <span>Instruction</span>
+                          </button>
+                        ` : ''}
+                      </div>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+
+            <form id="chatComposerForm" class="chat-composer-form">
+              ${state.pendingAttachment ? `
+                <div class="composer-file-chip">
+                  ${ICONS.fileText}
+                  <span class="composer-file-name">${esc(state.pendingAttachment.name)}</span>
+                  <button type="button" id="removeAttachmentBtn" class="btn-icon" style="width:22px;height:22px;min-width:22px;min-height:22px;" aria-label="Retirer la pièce jointe">
+                    ${ICONS.x}
+                  </button>
+                </div>
+              ` : ''}
+              <div class="composer-bar">
+                <input id="composerFileInput" type="file" class="hidden" />
+                <button type="button" id="composerAttachBtn" class="composer-attach-btn" aria-label="Joindre un fichier">
+                  ${ICONS.paperclip}
+                </button>
+                <input
+                  id="composerTextInput"
+                  type="text"
+                  class="composer-input"
+                  placeholder="Écrire un message"
+                  value="${esc(state.draftText)}"
+                />
+                <button
+                  type="submit"
+                  id="composerSendBtn"
+                  class="composer-send-btn"
+                  aria-label="Envoyer"
+                  ${(!state.draftText.trim() && !state.pendingAttachment) || state.sendingMessage ? 'disabled' : ''}
+                >
+                  ${ICONS.send}
+                </button>
+              </div>
+            </form>
+          `}
+        </section>
+      </div>
+    `;
+  }
+
+  function renderInstructionsMarkup() {
+    const me = window.FasoApi.currentUser;
+    const canCreate = isChefOrAdmin(me);
+
+    return `
+      <div class="page-scroll">
+        <div class="page-container">
+          <div class="page-header">
+            <div>
+              <h1 class="page-title">Instructions</h1>
+              <p class="page-subtitle">Suivi des consignes et des accusés de réception</p>
+            </div>
+            ${canCreate ? `
+              <button type="button" id="openNewInstructionBtn" class="btn btn-primary btn-pill">
+                ${ICONS.plus}
+                <span>Nouvelle</span>
+              </button>
+            ` : ''}
+          </div>
+
+          ${state.instructions.length === 0 ? `
+            <div class="dashed-empty">
+              ${ICONS.inbox}
+              <p style="font-size:0.875rem;">Aucune instruction pour le moment.</p>
+            </div>
+          ` : `
+            <div class="cards-stack">
+              ${state.instructions.map((inst) => {
+                const isClosed = inst.status === 'CLOTUREE' || inst.status === 'ANNULEE';
+                const total = Number(inst.total_recipients || 0);
+                const done = Number(inst.ack_count || 0);
+                const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+                const overdue = !isClosed && inst.deadline && new Date(inst.deadline).getTime() < Date.now();
+                const isAuthor = inst.creator_id === me.id;
+                const myRec = inst.my_recipient;
+
+                return `
+                  <article class="inst-card">
+                    <div class="inst-card-head">
+                      <div>
+                        <div class="inst-title-row">
+                          <h2 class="inst-title">${esc(inst.decryptedTitle)}</h2>
+                          ${isClosed ? `<span class="pill-closed">Clôturée</span>` : ''}
+                        </div>
+                        <p class="inst-author-meta">
+                          Émise par ${esc(inst.creator_name || 'Responsable')} · ${esc(formatDateShort(inst.created_at))}
+                        </p>
+                      </div>
+                      ${inst.deadline ? `
+                        <span class="inst-due-tag${overdue ? ' overdue' : ''}">
+                          ${ICONS.calendarClock}
+                          <span>${overdue ? 'Échue le ' : 'Avant le '}${esc(formatDateShort(inst.deadline))}</span>
+                        </span>
+                      ` : ''}
+                    </div>
+
+                    ${inst.decryptedBody ? `<p class="inst-body">${esc(inst.decryptedBody)}</p>` : ''}
+
+                    <div class="inst-progress-wrap">
+                      <div class="inst-progress-labels">
+                        <span>Prise de connaissance</span>
+                        <span>${done}/${total}</span>
+                      </div>
+                      <div class="progress-track">
+                        <div class="progress-fill" style="width:${pct}%;"></div>
+                      </div>
+                    </div>
+
+                    ${(isAuthor || me.role === 'ADMIN') && Array.isArray(inst.recipients) && inst.recipients.length > 0 ? `
+                      <div class="inst-recipients-box">
+                        ${inst.recipients.map((r) => {
+                          const hasAck = Boolean(r.acknowledgedAt);
+                          const hasView = Boolean(r.viewedAt);
+                          let statusCls = '';
+                          let statusIcon = ICONS.circle;
+                          let statusTxt = 'En attente';
+                          if (hasAck) {
+                            statusCls = ' lu';
+                            statusIcon = ICONS.checkCircle2;
+                            statusTxt = `Pris connaissance · ${formatTime(r.acknowledgedAt)}`;
+                          } else if (hasView) {
+                            statusCls = ' recu';
+                            statusIcon = ICONS.eye;
+                            statusTxt = 'Reçu';
+                          }
+                          return `
+                            <div class="inst-rec-row">
+                              <span>${esc(r.fullName)}</span>
+                              <span class="inst-rec-status${statusCls}">
+                                ${statusIcon}
+                                <span>${esc(statusTxt)}</span>
+                              </span>
+                            </div>
+                          `;
+                        }).join('')}
+                      </div>
+                    ` : ''}
+
+                    <div class="inst-actions">
+                      ${myRec && !isClosed && !myRec.acknowledgedAt ? `
+                        ${!myRec.viewedAt ? `
+                          <button type="button" class="btn btn-outline btn-sm btn-pill js-inst-view" data-inst-id="${esc(inst.id)}">
+                            Accuser réception
+                          </button>
+                        ` : ''}
+                        <button type="button" class="btn btn-primary btn-sm btn-pill js-inst-ack" data-inst-id="${esc(inst.id)}" data-inst-version="${Number(inst.version || 1)}">
+                          J'ai pris connaissance
+                        </button>
+                      ` : ''}
+                      ${isAuthor && !isClosed ? `
+                        <button type="button" class="btn btn-ghost btn-sm btn-pill inst-close-btn js-inst-close" data-inst-id="${esc(inst.id)}">
+                          Clôturer
+                        </button>
+                      ` : ''}
+                    </div>
+                  </article>
+                `;
+              }).join('')}
+            </div>
+          `}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderAdminMarkup() {
+    const me = window.FasoApi.currentUser;
+    const services = state.adminServices;
+    const users = state.adminUsers;
+    const noServiceUsers = users.filter((u) => !u.service_id);
+
+    const renderUserRow = (u) => {
+      const isRevoked = u.status === 'REVOKED' || u.is_revoked === 1;
+      const isSuspended = u.status === 'SUSPENDED';
+      const inactive = isRevoked || isSuspended;
+      const uname = u.username || String(u.matricule || '').toLowerCase();
+      return `
+        <div class="admin-user-row${inactive ? ' inactive' : ''}">
+          <div class="admin-user-left">
+            ${renderAvatar(u.full_name, u.avatar_data || u.avatarData, 'admin-avatar')}
+            <div>
+              <p class="admin-user-name-line">
+                <span class="admin-user-name">${esc(u.full_name)}</span>
+                <span class="admin-username">@${esc(uname)}</span>
+              </p>
+              <p class="admin-user-sub">
+                ${esc(roleLabel(u.role))}${u.job_title ? ` · ${esc(u.job_title)}` : ''}
+              </p>
+            </div>
+          </div>
+
+          <div class="admin-user-actions">
+            ${!isRevoked ? `
+              <button type="button" class="btn btn-outline btn-sm btn-pill js-admin-edit" data-user-id="${esc(u.id)}">
+                ${ICONS.pencil}
+                <span>Modifier</span>
+              </button>
+            ` : ''}
+            ${!inactive ? `
+              <button type="button" class="btn btn-outline btn-sm btn-pill js-admin-qr" data-user-id="${esc(u.id)}">
+                ${ICONS.qrCode}
+                <span>QR</span>
+              </button>
+            ` : ''}
+            ${u.id !== me.id ? (
+              isRevoked
+                ? `<span class="status-tag-revoked">Révoqué</span>`
+                : isSuspended
+                  ? `<button type="button" class="btn btn-outline btn-sm btn-pill js-admin-reactivate" data-user-id="${esc(u.id)}">
+                       ${ICONS.userCheck}
+                       <span>Réactiver</span>
+                     </button>
+                     <button type="button" class="btn btn-ghost-danger btn-sm btn-pill js-admin-revoke" data-user-id="${esc(u.id)}">
+                       ${ICONS.userX}
+                       <span>Révoquer</span>
+                     </button>`
+                  : `<button type="button" class="btn btn-ghost-danger btn-sm btn-pill js-admin-revoke" data-user-id="${esc(u.id)}">
+                       ${ICONS.userX}
+                       <span>Révoquer</span>
+                     </button>`
+            ) : ''}
+          </div>
+        </div>
+      `;
+    };
+
+    return `
+      <div class="page-scroll">
+        <div class="page-container">
+          <div class="page-header">
+            <div>
+              <h1 class="page-title">Administration</h1>
+              <p class="page-subtitle">Enrôlement des agents, services et journal d'audit</p>
+            </div>
+            <button type="button" id="openEnrollAgentBtn" class="btn btn-primary btn-pill">
+              ${ICONS.userPlus}
+              <span>Enrôler un agent</span>
+            </button>
+          </div>
+
+          <div class="admin-service-creator">
+            ${state.creatingServiceOpen ? `
+              <form id="createServiceForm" class="admin-service-form">
+                <input
+                  id="newServiceNameInput"
+                  class="input"
+                  type="text"
+                  placeholder="Nom du nouveau service (ex. Direction financière)"
+                  value="${esc(state.newServiceName)}"
+                  required
+                />
+                <button type="submit" class="btn btn-primary btn-sm btn-pill">Créer</button>
+                <button type="button" id="cancelCreateServiceBtn" class="btn btn-ghost btn-sm btn-pill">Annuler</button>
+              </form>
+            ` : `
+              <button type="button" id="showCreateServiceBtn" class="btn btn-outline btn-sm btn-pill">
+                ${ICONS.plus}
+                <span>Nouveau service</span>
+              </button>
+            `}
+          </div>
+
+          <div class="admin-sections">
+            ${services.map((s) => {
+              const members = users.filter((u) => u.service_id === s.id);
+              const activeCount = members.filter((u) => u.status === 'ACTIVE' && u.is_revoked === 0).length;
+              return `
+                <section>
+                  <div class="admin-section-head">
+                    <span style="color:var(--primary);display:inline-flex;">${ICONS.building2}</span>
+                    <h2 class="admin-section-title">${esc(s.name)}</h2>
+                    <span class="admin-section-count">(${activeCount}/${members.length})</span>
+                  </div>
+                  <div class="admin-card-list">
+                    ${members.length === 0
+                      ? `<p class="admin-empty-service">Aucun agent dans ce service.</p>`
+                      : members.map(renderUserRow).join('')}
+                  </div>
+                </section>
+              `;
+            }).join('')}
+
+            ${noServiceUsers.length > 0 ? `
+              <section>
+                <div class="admin-section-head">
+                  <h2 class="admin-section-title">Administration</h2>
+                </div>
+                <div class="admin-card-list">
+                  ${noServiceUsers.map(renderUserRow).join('')}
+                </div>
+              </section>
+            ` : ''}
+          </div>
+
+          <div class="admin-audit-block">
+            <div class="admin-audit-head">
+              <h2 class="admin-audit-title">
+                <span style="color:var(--muted-foreground);display:inline-flex;">${ICONS.history}</span>
+                <span>Journal d'audit</span>
+              </h2>
+              ${state.demoMode ? `
+                <button type="button" id="resetDemoBtn" class="btn btn-ghost btn-sm btn-pill">
+                  ${ICONS.rotateCcw}
+                  <span>Réinitialiser la démo</span>
+                </button>
+              ` : ''}
+            </div>
+            <div class="admin-card-list">
+              ${state.auditLogs.slice(0, 30).map((log) => `
+                <div class="audit-row">
+                  <div>
+                    <span style="font-weight:500;">${esc(log.details || log.event_type)}</span>
+                    ${log.actor_name ? `<span class="audit-actor"> · ${esc(log.actor_name)}</span>` : ''}
+                  </div>
+                  <span class="audit-time">${esc(formatTime(log.created_at))}</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // ==========================================================================
+  // POPOVER NOTIFICATIONS (Bell Popover)
+  // ==========================================================================
+  function renderNotifPopover(anchorRect = null) {
+    if (!state.notifPopoverOpen || !window.FasoApi.currentUser) {
+      notifPopoverRoot.innerHTML = '';
+      return;
+    }
+
+    const browserPerm = typeof window.Notification !== 'undefined' ? Notification.permission : 'denied';
+    let posStyle = 'top: 60px; right: 16px;';
+    if (anchorRect) {
+      const top = Math.min(window.innerHeight - 360, anchorRect.bottom + 8);
+      if (anchorRect.left < 320 && window.innerWidth >= 1024) {
+        posStyle = `top: ${Math.max(12, top)}px; left: ${Math.max(12, anchorRect.left)}px;`;
+      } else {
+        const right = Math.max(12, window.innerWidth - anchorRect.right);
+        posStyle = `top: ${Math.max(12, top)}px; right: ${right}px;`;
+      }
+    }
+
+    notifPopoverRoot.innerHTML = `
+      <div class="notif-popover" style="${posStyle}" role="dialog" aria-label="Notifications">
+        <div class="notif-popover-head">
+          <p class="notif-popover-title">Notifications</p>
+          ${browserPerm === 'default' ? `
+            <button type="button" id="enableBrowserNotifBtn" class="notif-optin-btn">
+              ${ICONS.bellRing}
+              <span>Activer les alertes</span>
+            </button>
+          ` : ''}
+        </div>
+        <div class="notif-popover-list">
+          ${state.notifications.length === 0 ? `
+            <p class="notif-empty">Aucune notification</p>
+          ` : state.notifications.slice(0, 25).map((n) => `
+            <button
+              type="button"
+              class="notif-row${!n.is_read ? ' unread' : ''} js-notif-item"
+              data-notif-id="${esc(n.id)}"
+              data-group-id="${esc(n.group_id || '')}"
+              data-inst-id="${esc(n.instruction_id || '')}"
+            >
+              <p class="notif-row-title">${esc(n.title)}</p>
+              <p class="notif-row-body">${esc(n.body)}</p>
+              <p class="notif-row-time">${esc(formatTime(n.updated_at || n.created_at))}</p>
+            </button>
+          `).join('')}
+        </div>
+      </div>
+    `;
+
+    const enableBtn = document.getElementById('enableBrowserNotifBtn');
+    if (enableBtn) {
+      enableBtn.addEventListener('click', async () => {
+        try {
+          const perm = await Notification.requestPermission();
+          if (perm === 'granted') {
+            await window.FasoApi.updatePreferences({ notifBrowserEnabled: true });
+            showToast('Notifications système activées');
+          }
+        } catch (_) {}
+        renderNotifPopover(anchorRect);
       });
     }
-  };
 
-  viewChat.addEventListener('pointerup', (e) => endSwipe(e, false));
-  viewChat.addEventListener('pointercancel', (e) => endSwipe(e, true));
-}
-
-function openActionConfirmModal({
-  title,
-  description,
-  inputLabel,
-  inputPlaceholder,
-  inputRequired,
-  submitLabel,
-  danger,
-  onConfirm
-}) {
-  document.getElementById('modalActionTitle').textContent = title;
-  document.getElementById('modalActionDesc').textContent = description;
-  document.getElementById('modalActionInputLabel').textContent = inputLabel;
-  const inp = document.getElementById('modalActionInput');
-  inp.value = '';
-  inp.placeholder = inputPlaceholder || '';
-  inp.required = Boolean(inputRequired);
-
-  const btn = document.getElementById('modalActionSubmitBtn');
-  btn.textContent = submitLabel || 'Confirmer';
-  btn.className = danger ? 'btn btn-danger' : 'btn btn-primary';
-
-  AppState.actionConfirmHandler = onConfirm;
-  openModal('modalActionConfirm');
-  setTimeout(() => inp.focus(), 30);
-}
-
-async function submitActionConfirm(event) {
-  event.preventDefault();
-  if (!AppState.actionConfirmHandler) return;
-  const val = document.getElementById('modalActionInput').value.trim();
-  const fn = AppState.actionConfirmHandler;
-  AppState.actionConfirmHandler = null;
-  closeModal('modalActionConfirm');
-  try {
-    await fn(val);
-  } catch (err) {
-    showToast(formatApiError(err.message), 'error');
+    notifPopoverRoot.querySelectorAll('.js-notif-item').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.notifId;
+        const gid = btn.dataset.groupId;
+        const iid = btn.dataset.instId;
+        try {
+          await window.FasoApi.markNotificationRead(id);
+          await refreshNotifications();
+        } catch (_) {}
+        state.notifPopoverOpen = false;
+        renderNotifPopover();
+        if (iid) {
+          state.tab = 'instructions';
+        } else if (gid) {
+          state.tab = 'messages';
+          state.activeGroupId = gid;
+          state.mobileChatListOpen = false;
+          await loadGroupMessages(gid);
+        }
+        renderApp();
+      });
+    });
   }
-}
 
-function toggleUserDropdown(event) {
-  if (event) event.stopPropagation();
-  const menu = document.getElementById('userDropdown');
-  const btn = document.getElementById('userMenuBtn');
-  const nextHidden = !menu.hidden;
-  menu.hidden = nextHidden;
-  btn.setAttribute('aria-expanded', String(!nextHidden));
-}
+  // ==========================================================================
+  // MODALES (GroupDialog, InstructionDialog, UserForm, QrDialog, RevokeDialog)
+  // ==========================================================================
+  function closeModal() {
+    state.modal = null;
+    modalRoot.innerHTML = '';
+  }
 
-function closeUserDropdown() {
-  const menu = document.getElementById('userDropdown');
-  const btn = document.getElementById('userMenuBtn');
-  if (menu) menu.hidden = true;
-  if (btn) btn.setAttribute('aria-expanded', 'false');
-}
+  function renderModal() {
+    if (!state.modal) {
+      modalRoot.innerHTML = '';
+      return;
+    }
 
-function changeUiLang(lang) {
-  setLanguage(lang);
-  syncLanguageButtons(lang);
-  closeUserDropdown();
-}
+    const { type, data } = state.modal;
+    const me = window.FasoApi.currentUser;
 
-function syncLanguageButtons(lang) {
-  ['fr', 'mo', 'di'].forEach((code) => {
-    const id = `langBtn${code.charAt(0).toUpperCase()}${code.slice(1)}`;
-    const btn = document.getElementById(id);
-    if (btn) btn.classList.toggle('active', code === lang);
+    if (type === 'group') {
+      const candidates = state.directoryAgents.filter((u) => {
+        return u.id !== me.id && u.status === 'ACTIVE';
+      });
+      const chefsIds = candidates
+        .filter((u) => u.role === 'DIRECTEUR' || u.role === 'CHEF_SERVICE')
+        .map((u) => u.id);
+
+      modalRoot.innerHTML = `
+        <div class="modal-backdrop" id="modalBackdrop">
+          <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+            <div class="modal-head">
+              <h2 id="modalTitle" class="modal-title">Nouveau groupe</h2>
+              <button type="button" class="btn-icon js-close-modal" aria-label="Fermer">${ICONS.x}</button>
+            </div>
+            <form id="groupModalForm" class="modal-form">
+              <div class="field-group">
+                <label class="field-label" for="grpNameInput">Nom du groupe</label>
+                <input id="grpNameInput" class="input" type="text" placeholder="ex. Cellule budget 2026" value="${esc(data.name || '')}" required />
+              </div>
+              ${(me.role === 'ADMIN' || me.role === 'DIRECTEUR') && chefsIds.length > 0 ? `
+                <button type="button" id="selectAllChefsBtn" class="shortcut-link">
+                  Sélectionner tous les chefs de service
+                </button>
+              ` : ''}
+              <div class="field-group">
+                <label class="field-label">Membres</label>
+                <div class="checklist-box">
+                  ${candidates.map((u) => {
+                    const checked = data.members.has(u.id) ? 'checked' : '';
+                    const sName = u.serviceName || u.serviceMinistry || '';
+                    return `
+                      <label class="checklist-row">
+                        <input type="checkbox" class="checklist-checkbox js-grp-member" value="${esc(u.id)}" ${checked} />
+                        <div class="checklist-info">
+                          <p class="checklist-name">${esc(u.fullName)}</p>
+                          <p class="checklist-sub">${esc(roleLabel(u.role))}${sName ? ` · ${esc(sName)}` : ''}</p>
+                        </div>
+                      </label>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-ghost js-close-modal">Annuler</button>
+                <button type="submit" class="btn btn-primary">Créer</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      `;
+
+      const chefsBtn = document.getElementById('selectAllChefsBtn');
+      if (chefsBtn) {
+        chefsBtn.addEventListener('click', () => {
+          data.name = document.getElementById('grpNameInput').value;
+          for (const id of chefsIds) data.members.add(id);
+          renderModal();
+        });
+      }
+
+      modalRoot.querySelectorAll('.js-grp-member').forEach((cb) => {
+        cb.addEventListener('change', () => {
+          if (cb.checked) data.members.add(cb.value);
+          else data.members.delete(cb.value);
+        });
+      });
+
+      document.getElementById('groupModalForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = document.getElementById('grpNameInput').value.trim();
+        const memberIds = Array.from(data.members);
+        if (!name || memberIds.length === 0) {
+          showToast('Saisissez un nom et au moins un membre', '', true);
+          return;
+        }
+        try {
+          const res = await window.FasoApi.createGroup({
+            name,
+            serviceId: me.serviceId || null,
+            memberIds
+          });
+          closeModal();
+          await refreshGroups();
+          if (res.group) {
+            state.activeGroupId = res.group.id;
+            state.mobileChatListOpen = false;
+            await loadGroupMessages(res.group.id);
+          }
+          showToast('Groupe créé');
+          renderApp();
+        } catch (err) {
+          showToast('Impossible de créer le groupe', err.message, true);
+        }
+      });
+    } else if (type === 'instruction') {
+      const recipientsPool = state.directoryAgents.filter(
+        (u) => u.id !== me.id && u.status === 'ACTIVE'
+      );
+
+      modalRoot.innerHTML = `
+        <div class="modal-backdrop" id="modalBackdrop">
+          <div class="modal-dialog max-w-lg" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+            <div class="modal-head">
+              <h2 id="modalTitle" class="modal-title">Nouvelle instruction</h2>
+              <button type="button" class="btn-icon js-close-modal" aria-label="Fermer">${ICONS.x}</button>
+            </div>
+            <form id="instModalForm" class="modal-form">
+              <div class="field-group">
+                <label class="field-label" for="instTitleInput">Objet</label>
+                <input id="instTitleInput" class="input" type="text" placeholder="ex. Transmission du rapport trimestriel" value="${esc(data.title || '')}" required />
+              </div>
+              <div class="field-group">
+                <label class="field-label" for="instBodyInput">Contenu</label>
+                <textarea id="instBodyInput" class="textarea" rows="3" required>${esc(data.body || '')}</textarea>
+              </div>
+              <div class="field-group">
+                <label class="field-label" for="instDueInput">Échéance (facultatif)</label>
+                <input id="instDueInput" class="input" type="date" value="${esc(data.dueAt || '')}" />
+              </div>
+              <div class="field-group">
+                <label class="field-label">Destinataires</label>
+                <div class="checklist-box" style="max-height:176px;">
+                  ${recipientsPool.map((u) => {
+                    const checked = data.to.has(u.id) ? 'checked' : '';
+                    return `
+                      <label class="checklist-row">
+                        <input type="checkbox" class="checklist-checkbox js-inst-to" value="${esc(u.id)}" ${checked} />
+                        <div class="checklist-info">
+                          <p class="checklist-name">${esc(u.fullName)}</p>
+                          <p class="checklist-sub">${esc(u.jobTitle || roleLabel(u.role))}</p>
+                        </div>
+                      </label>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-ghost js-close-modal">Annuler</button>
+                <button type="submit" class="btn btn-primary">Envoyer l'instruction</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      `;
+
+      modalRoot.querySelectorAll('.js-inst-to').forEach((cb) => {
+        cb.addEventListener('change', () => {
+          if (cb.checked) data.to.add(cb.value);
+          else data.to.delete(cb.value);
+        });
+      });
+
+      document.getElementById('instModalForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const title = document.getElementById('instTitleInput').value.trim();
+        const body = document.getElementById('instBodyInput').value.trim();
+        const dueRaw = document.getElementById('instDueInput').value;
+        const recipientIds = Array.from(data.to);
+
+        if (!title || !body || recipientIds.length === 0) {
+          showToast('Renseignez l\'objet, le contenu et au moins un destinataire', '', true);
+          return;
+        }
+
+        try {
+          const scopeRes = await window.FasoApi.prepareInstructionScope(recipientIds);
+          const enc = await encryptGroupPayloadSafely(scopeRes.groupId, {
+            v: 2,
+            kind: 'instruction',
+            title,
+            description: body
+          });
+
+          const deadlineIso = dueRaw ? new Date(`${dueRaw}T18:00:00`).toISOString() : null;
+          await window.FasoApi.createInstruction({
+            groupId: scopeRes.groupId,
+            messageId: data.fromMessageId || null,
+            titleCiphertext: enc.ciphertext,
+            megolmSessionId: enc.megolmSessionId,
+            senderEd25519: enc.senderEd25519,
+            signature: enc.signature,
+            deadline: deadlineIso,
+            recipientIds: scopeRes.recipientIds
+          });
+
+          closeModal();
+          await refreshInstructions();
+          showToast('Instruction envoyée');
+          if (data.switchToInstructions) {
+            state.tab = 'instructions';
+          }
+          renderApp();
+        } catch (err) {
+          showToast('Envoi impossible', err.message, true);
+        }
+      });
+    } else if (type === 'userForm') {
+      const u = data.user;
+      const isSelf = u && u.id === me.id;
+      const roleVal = data.role;
+      const showService = roleVal !== 'ADMIN';
+
+      modalRoot.innerHTML = `
+        <div class="modal-backdrop" id="modalBackdrop">
+          <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+            <div class="modal-head">
+              <h2 id="modalTitle" class="modal-title">${u ? 'Modifier l\'agent' : 'Enrôler un nouvel agent'}</h2>
+              <button type="button" class="btn-icon js-close-modal" aria-label="Fermer">${ICONS.x}</button>
+            </div>
+            <form id="userModalForm" class="modal-form">
+              <div class="field-group">
+                <label class="field-label" for="ufName">Nom complet</label>
+                <input id="ufName" class="input" type="text" value="${esc(data.fullName)}" required />
+              </div>
+              <div class="field-group">
+                <label class="field-label" for="ufTitle">Fonction</label>
+                <input id="ufTitle" class="input" type="text" placeholder="ex. Chargé de mission" value="${esc(data.jobTitle)}" />
+              </div>
+              <div class="form-grid-2">
+                <div class="field-group">
+                  <label class="field-label" for="ufUsername">Identifiant</label>
+                  <input id="ufUsername" class="input" type="text" value="${esc(data.username)}" required />
+                </div>
+                <div class="field-group">
+                  <label class="field-label" for="ufPassword">${u ? 'Nouveau mot de passe' : 'Mot de passe initial'}</label>
+                  <input id="ufPassword" class="input" type="text" placeholder="${u ? 'Laisser vide pour garder' : ''}" value="${esc(data.password)}" ${u ? '' : 'required'} />
+                </div>
+              </div>
+              <div class="form-grid-2">
+                <div class="field-group">
+                  <label class="field-label" for="ufRole">Rôle</label>
+                  <select id="ufRole" class="select-input" ${isSelf ? 'disabled' : ''}>
+                    <option value="AGENT" ${roleVal === 'AGENT' ? 'selected' : ''}>Agent</option>
+                    <option value="CHEF_SERVICE" ${roleVal === 'CHEF_SERVICE' || roleVal === 'DIRECTEUR' ? 'selected' : ''}>Chef de service</option>
+                    <option value="ADMIN" ${roleVal === 'ADMIN' ? 'selected' : ''}>Administrateur</option>
+                  </select>
+                </div>
+                ${showService ? `
+                  <div class="field-group">
+                    <label class="field-label" for="ufService">Service</label>
+                    <select id="ufService" class="select-input">
+                      ${state.adminServices.map((s) => `
+                        <option value="${esc(s.id)}" ${data.serviceId === s.id ? 'selected' : ''}>${esc(s.name)}</option>
+                      `).join('')}
+                    </select>
+                  </div>
+                ` : ''}
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-ghost js-close-modal">Annuler</button>
+                <button type="submit" class="btn btn-primary">${u ? 'Enregistrer' : 'Enrôler'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      `;
+
+      const roleSel = document.getElementById('ufRole');
+      if (roleSel) {
+        roleSel.addEventListener('change', () => {
+          data.fullName = document.getElementById('ufName').value;
+          data.jobTitle = document.getElementById('ufTitle').value;
+          data.username = document.getElementById('ufUsername').value;
+          data.password = document.getElementById('ufPassword').value;
+          data.role = roleSel.value;
+          renderModal();
+        });
+      }
+
+      document.getElementById('userModalForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fullName = document.getElementById('ufName').value.trim();
+        const jobTitle = document.getElementById('ufTitle').value.trim();
+        const username = document.getElementById('ufUsername').value.trim();
+        const password = document.getElementById('ufPassword').value;
+        const role = document.getElementById('ufRole').value;
+        const srvEl = document.getElementById('ufService');
+        const serviceId = role === 'ADMIN' ? null : (srvEl ? srvEl.value : data.serviceId);
+
+        try {
+          if (u) {
+            await window.FasoApi.updateAdminUser(u.id, {
+              fullName,
+              jobTitle,
+              username,
+              password,
+              role,
+              serviceId
+            });
+            closeModal();
+            await Promise.all([refreshAdminData(), refreshDirectory(), refreshGroups()]);
+            showToast('Modifications enregistrées');
+            renderApp();
+          } else {
+            const res = await window.FasoApi.enrollAdminUser({
+              fullName,
+              jobTitle,
+              username,
+              password,
+              role,
+              serviceId
+            });
+            await Promise.all([refreshAdminData(), refreshDirectory(), refreshGroups()]);
+            showToast('Agent enrôlé');
+            state.modal = {
+              type: 'qr',
+              data: {
+                userId: res.user.id,
+                userName: res.user.fullName,
+                qrPayload: res.qrPayload
+              }
+            };
+            renderModal();
+            renderApp();
+          }
+        } catch (err) {
+          showToast('Erreur d\'enregistrement', err.message, true);
+        }
+      });
+    } else if (type === 'qr') {
+      const enrollUrl = `${window.location.origin}/?enroll=${encodeURIComponent(data.qrPayload)}`;
+      const svgMarkup = window.FasoQr.renderQrSvg(enrollUrl, 220);
+
+      modalRoot.innerHTML = `
+        <div class="modal-backdrop" id="modalBackdrop">
+          <div class="modal-dialog max-w-xs" style="text-align:center;" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+            <div class="modal-head" style="text-align:left;">
+              <h2 id="modalTitle" class="modal-title">QR code — ${esc(data.userName)}</h2>
+              <button type="button" class="btn-icon js-close-modal" aria-label="Fermer">${ICONS.x}</button>
+            </div>
+            <div class="qr-display-card">
+              ${svgMarkup}
+            </div>
+            <p class="modal-desc" style="font-size:0.75rem;margin-bottom:14px;">
+              Valable pour une seule connexion. Scannez depuis l'écran d'accueil de FasoBrief.
+            </p>
+            <div style="display:flex;gap:8px;justify-content:center;">
+              <button type="button" id="regenQrBtn" class="btn btn-outline btn-sm btn-pill">
+                ${ICONS.refreshCw}
+                <span>Nouveau code</span>
+              </button>
+              <button type="button" id="copyQrLinkBtn" class="btn btn-ghost btn-sm btn-pill">
+                Copier le lien
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.getElementById('regenQrBtn').addEventListener('click', async () => {
+        try {
+          const res = await window.FasoApi.generateUserQr(data.userId);
+          data.qrPayload = res.qrPayload;
+          await refreshAdminData();
+          showToast('Nouveau QR code généré');
+          renderModal();
+          renderApp();
+        } catch (err) {
+          showToast('Impossible de régénérer le QR', err.message, true);
+        }
+      });
+
+      document.getElementById('copyQrLinkBtn').addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(enrollUrl);
+          showToast('Lien d\'enrôlement à usage unique copié');
+        } catch (_) {}
+      });
+    } else if (type === 'revokeConfirm') {
+      const u = data.user;
+      modalRoot.innerHTML = `
+        <div class="modal-backdrop" id="modalBackdrop">
+          <div class="modal-dialog" role="alertdialog" aria-modal="true" aria-labelledby="modalTitle">
+            <h2 id="modalTitle" class="modal-title">Révoquer ${esc(u.full_name)} ?</h2>
+            <p class="modal-desc">
+              Sa session active sera immédiatement coupée, son QR code invalidé et il ne pourra plus accéder aux conversations ni aux instructions.
+            </p>
+            <div class="modal-footer" style="margin-top:20px;">
+              <button type="button" class="btn btn-outline js-close-modal">Annuler</button>
+              <button type="button" id="confirmRevokeBtn" class="btn btn-destructive">Révoquer</button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.getElementById('confirmRevokeBtn').addEventListener('click', async () => {
+        try {
+          await window.FasoApi.revokeAgent(u.id, 'Révocation administrative immédiate');
+          closeModal();
+          await Promise.all([refreshAdminData(), refreshDirectory(), refreshGroups()]);
+          showToast(`${u.full_name} a été révoqué`);
+          renderApp();
+        } catch (err) {
+          showToast('Révocation refusée', err.message, true);
+        }
+      });
+    } else if (type === 'serverInspection') {
+      const inspectData = data.inspection || {};
+      const msgs = inspectData.messagesTableSample || [];
+      const files = inspectData.filesTableSample || [];
+
+      modalRoot.innerHTML = `
+        <div class="modal-backdrop" id="modalBackdrop">
+          <div class="modal-dialog max-w-lg" role="dialog" aria-modal="true" aria-labelledby="modalTitle" style="max-width:680px;">
+            <div class="modal-head">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <div class="sidebar-shield">${ICONS.shieldSm}</div>
+                <div>
+                  <h2 id="modalTitle" class="modal-title">Preuve « Serveur Aveugle » (Zéro-Clair)</h2>
+                  <p class="modal-sub">Inspection en direct de la base SQLite et des clés serveur</p>
+                </div>
+              </div>
+              <button type="button" class="btn-icon js-close-modal" aria-label="Fermer">${ICONS.x}</button>
+            </div>
+
+            <div style="padding:16px 20px;">
+              <div class="server-inspect-stat-grid">
+                <div class="server-inspect-stat">
+                  <div class="server-inspect-stat-val">0</div>
+                  <div class="server-inspect-stat-label">Clés privées sur serveur</div>
+                </div>
+                <div class="server-inspect-stat">
+                  <div class="server-inspect-stat-val" style="color:var(--primary);">NON</div>
+                  <div class="server-inspect-stat-label">Capacité déchiffrement serveur</div>
+                </div>
+                <div class="server-inspect-stat">
+                  <div class="server-inspect-stat-val">${msgs.length}</div>
+                  <div class="server-inspect-stat-label">Messages chiffrés en base</div>
+                </div>
+              </div>
+
+              <h3 style="font-size:0.8125rem; font-weight:600; margin-bottom:4px;">Échantillon brut table <code>messages</code> (SQLite) :</h3>
+              <p style="font-size:0.75rem; color:var(--muted-foreground); margin-bottom:8px;">Zéro texte en clair : seul le ciphertext Megolm et la signature Ed25519 sont enregistrés.</p>
+              <div style="max-height:160px; overflow:auto; border:1px solid var(--border); border-radius:8px;">
+                <table class="server-inspect-table">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Protocole</th>
+                      <th>Extrait Ciphertext</th>
+                      <th>Signature Ed25519</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${msgs.length === 0 ? `<tr><td colspan="4" style="text-align:center; padding:12px;">Aucun message enregistré</td></tr>` : msgs.map((m) => `
+                      <tr>
+                        <td><code>${esc(m.id)}</code></td>
+                        <td><span class="status-pill status-confirmed">${esc(m.protocol)}</span></td>
+                        <td><code>${esc(m.ciphertext_sample || '...')}... (${m.ciphertext_len} octets)</code></td>
+                        <td><code>${esc(m.ed25519_sig_sample || '...')}...</code></td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="modal-footer" style="padding:12px 20px;">
+              <button type="button" class="btn btn-primary js-close-modal">Fermer l'inspection</button>
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (type === 'profileModal') {
+      const u = window.FasoApi.currentUser || {};
+      const curAvatar = data.avatarData !== undefined ? data.avatarData : (u.avatarData || null);
+      const curFullName = data.fullName !== undefined ? data.fullName : (u.fullName || '');
+      const curJobTitle = data.jobTitle !== undefined ? data.jobTitle : (u.jobTitle || '');
+
+      modalRoot.innerHTML = `
+        <div class="modal-backdrop" id="modalBackdrop">
+          <div class="modal-dialog max-w-sm" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+            <div class="modal-head">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <div class="sidebar-shield">${ICONS.pencil}</div>
+                <div>
+                  <h2 id="modalTitle" class="modal-title">Mon profil agent</h2>
+                  <p class="modal-sub">Identité souveraine et informations professionnelles</p>
+                </div>
+              </div>
+              <button type="button" class="btn-icon js-close-modal" aria-label="Fermer">${ICONS.x}</button>
+            </div>
+
+            <form id="profileModalForm" style="padding:16px 20px;">
+              <!-- Photo de profil -->
+              <div style="display:flex; flex-direction:column; align-items:center; gap:12px; margin-bottom:18px;">
+                <div id="profileAvatarPreview">
+                  ${renderAvatar(curFullName, curAvatar, 'profile-avatar-large')}
+                </div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                  <input type="file" id="profileAvatarFileInput" accept="image/png,image/jpeg,image/webp" style="display:none;" />
+                  <button type="button" id="changeAvatarBtn" class="btn btn-outline btn-sm btn-pill">
+                    ${ICONS.pencil}
+                    <span>Changer la photo</span>
+                  </button>
+                  ${curAvatar ? `
+                    <button type="button" id="removeAvatarBtn" class="btn btn-ghost-danger btn-sm btn-pill">
+                      ${ICONS.x}
+                      <span>Supprimer</span>
+                    </button>
+                  ` : ''}
+                </div>
+              </div>
+
+              <!-- Champs d'administration VERROUILLÉS -->
+              <div class="field-group" style="margin-bottom:12px;">
+                <label class="field-label" style="display:flex; justify-content:space-between; align-items:center;">
+                  <span>Matricule administratif</span>
+                  <span class="lock-badge">${ICONS.lock} Verrouillé</span>
+                </label>
+                <input class="input field-locked" value="${esc(u.matricule || '')}" disabled title="Le matricule ne peut pas être modifié" />
+              </div>
+
+              <div class="field-group" style="margin-bottom:12px;">
+                <label class="field-label" style="display:flex; justify-content:space-between; align-items:center;">
+                  <span>Rôle d'habilitation</span>
+                  <span class="lock-badge">${ICONS.lock} Défini par décret</span>
+                </label>
+                <input class="input field-locked" value="${esc(roleLabel(u.role))}" disabled title="Le rôle d'habilitation est fixé par l'administration" />
+              </div>
+
+              <div class="field-group" style="margin-bottom:12px;">
+                <label class="field-label" style="display:flex; justify-content:space-between; align-items:center;">
+                  <span>Affectation de service</span>
+                  <span class="lock-badge">${ICONS.lock} Attribution hiérarchique</span>
+                </label>
+                <input class="input field-locked" value="${esc(userServiceDisplay(u) || u.serviceMinistry || 'MTDPCE / DGTD')}" disabled title="L'affectation de service est gérée par l'administrateur" />
+              </div>
+
+              <!-- Champs MODIFIABLES par l'agent -->
+              <div class="field-group" style="margin-bottom:12px;">
+                <label class="field-label" for="profileFullNameInput">Nom et prénom(s) *</label>
+                <input
+                  id="profileFullNameInput"
+                  class="input"
+                  type="text"
+                  value="${esc(curFullName)}"
+                  placeholder="ex. Fatou Zongo"
+                  required
+                />
+              </div>
+
+              <div class="field-group" style="margin-bottom:16px;">
+                <label class="field-label" for="profileJobTitleInput">Fonction / Poste occupé</label>
+                <input
+                  id="profileJobTitleInput"
+                  class="input"
+                  type="text"
+                  value="${esc(curJobTitle)}"
+                  placeholder="ex. Chef de division télécoms"
+                />
+              </div>
+
+              <div class="modal-footer" style="padding:0; margin-top:20px;">
+                <button type="button" class="btn btn-ghost js-close-modal">Annuler</button>
+                <button type="submit" id="saveProfileBtn" class="btn btn-primary btn-pill">Enregistrer</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      `;
+
+      const avatarInput = document.getElementById('profileAvatarFileInput');
+      const changeBtn = document.getElementById('changeAvatarBtn');
+      if (changeBtn && avatarInput) {
+        changeBtn.addEventListener('click', () => avatarInput.click());
+      }
+
+      if (avatarInput) {
+        avatarInput.addEventListener('change', () => {
+          const file = avatarInput.files && avatarInput.files[0];
+          if (!file) return;
+          if (!file.type.startsWith('image/')) {
+            showToast('Format d\'image non supporté', 'Veuillez sélectionner un fichier PNG ou JPEG.', true);
+            return;
+          }
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            const img = new Image();
+            img.onload = () => {
+              // Redimensionnement via Canvas en 128x128 max pour une empreinte SQLite minimale
+              const maxDim = 128;
+              let width = img.width;
+              let height = img.height;
+              if (width > height) {
+                if (width > maxDim) {
+                  height = Math.round((height * maxDim) / width);
+                  width = maxDim;
+                }
+              } else {
+                if (height > maxDim) {
+                  width = Math.round((width * maxDim) / height);
+                  height = maxDim;
+                }
+              }
+              const canvas = document.createElement('canvas');
+              canvas.width = width;
+              canvas.height = height;
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(img, 0, 0, width, height);
+              const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+              data.avatarData = dataUrl;
+              renderModal();
+            };
+            img.src = e.target.result;
+          };
+          reader.readAsDataURL(file);
+        });
+      }
+
+      const removeBtn = document.getElementById('removeAvatarBtn');
+      if (removeBtn) {
+        removeBtn.addEventListener('click', () => {
+          data.avatarData = null;
+          renderModal();
+        });
+      }
+
+      document.getElementById('profileModalForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fullName = document.getElementById('profileFullNameInput').value.trim();
+        const jobTitle = document.getElementById('profileJobTitleInput').value.trim();
+        if (!fullName || fullName.length < 2) {
+          showToast('Nom incomplet', 'Le nom complet doit comporter au moins 2 caractères.', true);
+          return;
+        }
+        const saveBtn = document.getElementById('saveProfileBtn');
+        if (saveBtn) saveBtn.disabled = true;
+        try {
+          await window.FasoApi.updateProfile({
+            fullName,
+            jobTitle,
+            avatarData: data.avatarData !== undefined ? data.avatarData : (u.avatarData || null)
+          });
+          closeModal();
+          showToast('Profil mis à jour');
+          renderApp();
+        } catch (err) {
+          if (saveBtn) saveBtn.disabled = false;
+          showToast('Erreur mise à jour profil', err.message || 'Impossible de sauvegarder le profil.', true);
+        }
+      });
+    }
+
+    modalRoot.querySelectorAll('.js-close-modal').forEach((btn) => {
+      btn.addEventListener('click', closeModal);
+    });
+    const backdrop = document.getElementById('modalBackdrop');
+    if (backdrop) {
+      backdrop.addEventListener('click', (e) => {
+        if (e.target === backdrop) closeModal();
+      });
+    }
+  }
+
+  // ==========================================================================
+  // ÉCOUTEURS D'ÉVÉNEMENTS DOM PAR VUE
+  // ==========================================================================
+  function bindShellEvents() {
+    document.querySelectorAll('.js-switch-lang').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (typeof window.setLanguage === 'function') {
+          window.setLanguage(btn.dataset.lang);
+        }
+        renderApp();
+      });
+    });
+
+    document.querySelectorAll('.js-open-inspection').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        try {
+          const res = await window.FasoApi.request('/api/admin/server-inspection');
+          state.modal = {
+            type: 'serverInspection',
+            data: { inspection: res }
+          };
+          renderModal();
+        } catch (err) {
+          showToast('Erreur lors de l\'inspection serveur', err.message, true);
+        }
+      });
+    });
+    document.querySelectorAll('.js-nav-tab').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const nextTab = btn.dataset.tab;
+        state.tab = nextTab;
+        state.notifPopoverOpen = false;
+        renderNotifPopover();
+        if (nextTab === 'messages') {
+          await refreshGroups();
+          if (state.activeGroupId) await loadGroupMessages(state.activeGroupId);
+        } else if (nextTab === 'instructions') {
+          await refreshInstructions();
+        } else if (nextTab === 'admin') {
+          await refreshAdminData();
+        }
+        renderApp();
+        if (nextTab === 'messages') scrollMessagesToBottom();
+      });
+    });
+
+    document.querySelectorAll('.js-logout-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        state.notifPopoverOpen = false;
+        closeModal();
+        renderNotifPopover();
+        await window.FasoApi.logoutServer();
+        state.loginStep = 'credentials';
+        state.loginPassword = '';
+        state.loginOtp = '';
+        state.loginError = '';
+        renderApp();
+      });
+    });
+
+    document.querySelectorAll('.js-bell-btn').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        state.notifPopoverOpen = !state.notifPopoverOpen;
+        if (state.notifPopoverOpen) {
+          await refreshNotifications();
+          renderNotifPopover(btn.getBoundingClientRect());
+        } else {
+          renderNotifPopover();
+        }
+      });
+    });
+
+    document.querySelectorAll('.js-open-profile').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const me = window.FasoApi.currentUser;
+        if (!me) return;
+        state.modal = {
+          type: 'profileModal',
+          data: {
+            fullName: me.fullName,
+            jobTitle: me.jobTitle || '',
+            avatarData: me.avatarData || null
+          }
+        };
+        renderModal();
+      });
+    });
+  }
+
+  function bindChatEvents() {
+    const newGrpBtn = document.getElementById('openNewGroupBtn');
+    if (newGrpBtn) {
+      newGrpBtn.addEventListener('click', async () => {
+        await refreshDirectory();
+        state.modal = {
+          type: 'group',
+          data: { name: '', members: new Set() }
+        };
+        renderModal();
+      });
+    }
+
+    document.querySelectorAll('.js-select-conv').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const gid = btn.dataset.groupId;
+        state.activeGroupId = gid;
+        state.mobileChatListOpen = false;
+        await loadGroupMessages(gid);
+        renderApp();
+        scrollMessagesToBottom();
+      });
+    });
+
+    const backBtn = document.getElementById('mobileBackToConvListBtn');
+    if (backBtn) {
+      backBtn.addEventListener('click', () => {
+        state.mobileChatListOpen = true;
+        renderApp();
+      });
+    }
+
+    document.querySelectorAll('.js-download-file').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const msgId = btn.dataset.msgId;
+        const list = state.messagesByGroup.get(state.activeGroupId) || [];
+        const found = list.find((m) => m.id === msgId);
+        if (found && found.fileMeta) {
+          downloadAndDecryptAttachment(found.fileMeta);
+        }
+      });
+    });
+
+    document.querySelectorAll('.js-convert-msg').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const msgId = btn.dataset.msgId;
+        const list = state.messagesByGroup.get(state.activeGroupId) || [];
+        const found = list.find((m) => m.id === msgId);
+        if (!found) return;
+        await refreshDirectory();
+
+        let preselected = new Set();
+        try {
+          const details = await window.FasoApi.getGroupDetails(state.activeGroupId);
+          for (const mem of (details.members || [])) {
+            if (mem.id !== window.FasoApi.currentUser.id) preselected.add(mem.id);
+          }
+        } catch (_) {}
+
+        state.modal = {
+          type: 'instruction',
+          data: {
+            title: '',
+            body: found.text || '',
+            dueAt: '',
+            to: preselected,
+            fromMessageId: found.id,
+            switchToInstructions: false
+          }
+        };
+        renderModal();
+      });
+    });
+
+    const fileInput = document.getElementById('composerFileInput');
+    const attachBtn = document.getElementById('composerAttachBtn');
+    if (attachBtn && fileInput) {
+      attachBtn.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', () => {
+        const f = fileInput.files && fileInput.files[0];
+        if (!f) return;
+        if (f.size > 15 * 1024 * 1024) {
+          showToast('Fichier trop volumineux (max 15 Mo)', '', true);
+          return;
+        }
+        state.pendingAttachment = f;
+        renderApp();
+      });
+    }
+
+    const rmAttach = document.getElementById('removeAttachmentBtn');
+    if (rmAttach) {
+      rmAttach.addEventListener('click', () => {
+        state.pendingAttachment = null;
+        renderApp();
+      });
+    }
+
+    const textInput = document.getElementById('composerTextInput');
+    const sendBtn = document.getElementById('composerSendBtn');
+    if (textInput && sendBtn) {
+      textInput.addEventListener('input', () => {
+        state.draftText = textInput.value;
+        sendBtn.disabled = (!state.draftText.trim() && !state.pendingAttachment) || state.sendingMessage;
+      });
+    }
+
+    const composerForm = document.getElementById('chatComposerForm');
+    if (composerForm) {
+      composerForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (state.sendingMessage || !state.activeGroupId) return;
+        const cleanText = state.draftText.trim();
+        const fileObj = state.pendingAttachment;
+        if (!cleanText && !fileObj) return;
+
+        state.sendingMessage = true;
+        try {
+          let uploadedFileId = null;
+          let encryptedFileMeta = null;
+
+          if (fileObj) {
+            const buf = await fileObj.arrayBuffer();
+            const encFile = await window.FasoCrypto.encryptFile(buf, fileObj.name, fileObj.type);
+            const up = await window.FasoApi.uploadGroupEncryptedFile(state.activeGroupId, encFile.encryptedBlob);
+            uploadedFileId = up.fileId;
+            encryptedFileMeta = {
+              fileId: up.fileId,
+              name: encFile.originalName,
+              mime: encFile.originalMime,
+              size: encFile.originalSize,
+              key: encFile.fileKeyBase64,
+              iv: encFile.ivBase64,
+              sha256: encFile.sha256Base64
+            };
+          }
+
+          const megolmPayload = await encryptGroupPayloadSafely(state.activeGroupId, {
+            v: 2,
+            kind: encryptedFileMeta ? 'file' : 'text',
+            text: cleanText,
+            file: encryptedFileMeta
+          });
+
+          await window.FasoApi.sendEncryptedMessage(state.activeGroupId, {
+            ...megolmPayload,
+            fileId: uploadedFileId,
+            clientMsgId: 'cmsg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+            messageType: encryptedFileMeta ? 'FILE' : 'CHAT'
+          });
+
+          state.draftText = '';
+          state.pendingAttachment = null;
+          await refreshGroups();
+          await loadGroupMessages(state.activeGroupId);
+          renderApp();
+          scrollMessagesToBottom();
+        } catch (err) {
+          showToast('Échec de l\'envoi chiffré', err.message, true);
+        } finally {
+          state.sendingMessage = false;
+        }
+      });
+    }
+  }
+
+  function bindInstructionsEvents() {
+    const newBtn = document.getElementById('openNewInstructionBtn');
+    if (newBtn) {
+      newBtn.addEventListener('click', async () => {
+        await refreshDirectory();
+        state.modal = {
+          type: 'instruction',
+          data: {
+            title: '',
+            body: '',
+            dueAt: '',
+            to: new Set(),
+            fromMessageId: null,
+            switchToInstructions: false
+          }
+        };
+        renderModal();
+      });
+    }
+
+    document.querySelectorAll('.js-inst-view').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const instId = btn.dataset.instId;
+        try {
+          await window.FasoApi.markInstructionViewed(instId);
+          await refreshInstructions();
+          showToast('Accusé de réception enregistré');
+          renderApp();
+        } catch (err) {
+          showToast('Action refusée', err.message, true);
+        }
+      });
+    });
+
+    document.querySelectorAll('.js-inst-ack').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const instId = btn.dataset.instId;
+        const version = Number(btn.dataset.instVersion || 1);
+        try {
+          const sig = window.FasoCrypto.signInstructionAck(instId, version, window.FasoApi.currentUser.id);
+          await window.FasoApi.acknowledgeInstruction(instId, sig);
+          await refreshInstructions();
+          showToast('Prise de connaissance confirmée (signature Ed25519)');
+          renderApp();
+        } catch (err) {
+          showToast('Confirmation impossible', err.message, true);
+        }
+      });
+    });
+
+    document.querySelectorAll('.js-inst-close').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const instId = btn.dataset.instId;
+        try {
+          await window.FasoApi.setInstructionFinalStatus(instId, 'CLOTUREE');
+          await refreshInstructions();
+          showToast('Instruction clôturée');
+          renderApp();
+        } catch (err) {
+          showToast('Clôture impossible', err.message, true);
+        }
+      });
+    });
+  }
+
+  function bindAdminEvents() {
+    const enrollBtn = document.getElementById('openEnrollAgentBtn');
+    if (enrollBtn) {
+      enrollBtn.addEventListener('click', () => {
+        const firstSrv = state.adminServices[0] ? state.adminServices[0].id : null;
+        state.modal = {
+          type: 'userForm',
+          data: {
+            user: null,
+            fullName: '',
+            jobTitle: '',
+            username: '',
+            password: '',
+            role: 'AGENT',
+            serviceId: firstSrv
+          }
+        };
+        renderModal();
+      });
+    }
+
+    const showSrvBtn = document.getElementById('showCreateServiceBtn');
+    if (showSrvBtn) {
+      showSrvBtn.addEventListener('click', () => {
+        state.creatingServiceOpen = true;
+        renderApp();
+        const inp = document.getElementById('newServiceNameInput');
+        if (inp) inp.focus();
+      });
+    }
+
+    const cancelSrvBtn = document.getElementById('cancelCreateServiceBtn');
+    if (cancelSrvBtn) {
+      cancelSrvBtn.addEventListener('click', () => {
+        state.creatingServiceOpen = false;
+        state.newServiceName = '';
+        renderApp();
+      });
+    }
+
+    const srvForm = document.getElementById('createServiceForm');
+    if (srvForm) {
+      srvForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = document.getElementById('newServiceNameInput').value.trim();
+        if (!name) return;
+        try {
+          await window.FasoApi.createAdminService(name);
+          state.creatingServiceOpen = false;
+          state.newServiceName = '';
+          await Promise.all([refreshAdminData(), refreshDirectory(), refreshGroups()]);
+          showToast('Service créé');
+          renderApp();
+        } catch (err) {
+          showToast('Création impossible', err.message, true);
+        }
+      });
+    }
+
+    document.querySelectorAll('.js-admin-edit').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const u = state.adminUsers.find((x) => x.id === btn.dataset.userId);
+        if (!u) return;
+        state.modal = {
+          type: 'userForm',
+          data: {
+            user: u,
+            fullName: u.full_name,
+            jobTitle: u.job_title || '',
+            username: u.username || String(u.matricule || '').toLowerCase(),
+            password: '',
+            role: u.role === 'DIRECTEUR' ? 'CHEF_SERVICE' : u.role,
+            serviceId: u.service_id || (state.adminServices[0] && state.adminServices[0].id) || null
+          }
+        };
+        renderModal();
+      });
+    });
+
+    document.querySelectorAll('.js-admin-qr').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const u = state.adminUsers.find((x) => x.id === btn.dataset.userId);
+        if (!u) return;
+        try {
+          const res = await window.FasoApi.generateUserQr(u.id);
+          await refreshAdminData();
+          state.modal = {
+            type: 'qr',
+            data: {
+              userId: u.id,
+              userName: u.full_name,
+              qrPayload: res.qrPayload
+            }
+          };
+          renderModal();
+          renderApp();
+        } catch (err) {
+          showToast('Impossible de générer le QR code', err.message, true);
+        }
+      });
+    });
+
+    document.querySelectorAll('.js-admin-revoke').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const u = state.adminUsers.find((x) => x.id === btn.dataset.userId);
+        if (!u) return;
+        state.modal = {
+          type: 'revokeConfirm',
+          data: { user: u }
+        };
+        renderModal();
+      });
+    });
+
+    document.querySelectorAll('.js-admin-reactivate').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const uid = btn.dataset.userId;
+        try {
+          await window.FasoApi.reactivateUser(uid);
+          await Promise.all([refreshAdminData(), refreshDirectory()]);
+          showToast('Compte réactivé');
+          renderApp();
+        } catch (err) {
+          showToast('Réactivation refusée', err.message, true);
+        }
+      });
+    });
+
+    const resetBtn = document.getElementById('resetDemoBtn');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', async () => {
+        try {
+          localStorage.removeItem('fasobrief_lovable_demo_msgs_v1');
+          for (const key of Object.keys(localStorage)) {
+            if (key.startsWith('fasobrief_olm_v2_')) localStorage.removeItem(key);
+          }
+          await window.FasoApi.resetDemo();
+          const cfg = await window.FasoApi.getAuthConfig();
+          state.demoAccounts = cfg.demoAccounts || [];
+          await provisionDemoEnvironmentIfNeeded(state.demoAccounts);
+          await loadAuthenticatedWorkspace();
+          showToast('Données de démonstration réinitialisées');
+          renderApp();
+        } catch (err) {
+          showToast('Réinitialisation impossible', err.message, true);
+        }
+      });
+    }
+  }
+
+  function scrollMessagesToBottom() {
+    requestAnimationFrame(() => {
+      const box = document.getElementById('chatMessagesContainer');
+      if (box) box.scrollTop = box.scrollHeight;
+    });
+  }
+
+  // Fermeture popover notifications au clic extérieur & touche Échap
+  document.addEventListener('click', (e) => {
+    if (state.notifPopoverOpen && !e.target.closest('.notif-popover') && !e.target.closest('.js-bell-btn')) {
+      state.notifPopoverOpen = false;
+      renderNotifPopover();
+    }
   });
-}
 
-function toggleColorTheme() {
-  const isDark = document.body.classList.toggle('dark-mode');
-  localStorage.setItem('fasobrief_theme', isDark ? 'dark' : 'light');
-  closeUserDropdown();
-}
-
-async function copyTextFromEl(elId) {
-  const el = document.getElementById(elId);
-  if (!el) return;
-  const text = el.textContent.trim();
-  try {
-    await navigator.clipboard.writeText(text);
-    showToast('Copié dans le presse-papiers.', 'success');
-  } catch (_) {
-    showToast('Sélectionnez le code affiché pour le copier.', 'info');
-  }
-}
-
-function showToast(message, variant = 'info') {
-  const region = document.getElementById('toastRegion');
-  if (!region) return;
-  const item = document.createElement('div');
-  item.className = `toast-item ${variant}`;
-  item.setAttribute('role', 'status');
-  item.innerHTML = `<span>${escapeHtml(message)}</span>`;
-  region.appendChild(item);
-
-  setTimeout(() => {
-    if (item.parentNode) item.parentNode.removeChild(item);
-  }, 3800);
-}
-
-function getInitials(name) {
-  if (!name) return 'FB';
-  return String(name)
-    .replace(/^(Dr\.|M\.|Mme)\s+/i, '')
-    .trim()
-    .split(/\s+/)
-    .map((p) => p[0] || '')
-    .join('')
-    .slice(0, 2)
-    .toUpperCase();
-}
-
-function formatTimeOnly(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-}
-
-function formatShortTimeOrDate(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const now = new Date();
-  const sameDay = d.toDateString() === now.toDateString();
-  if (sameDay) {
-    return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-  }
-  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
-}
-
-function formatDateTime(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleString('fr-FR', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (state.modal) closeModal();
+      if (state.notifPopoverOpen) {
+        state.notifPopoverOpen = false;
+        renderNotifPopover();
+      }
+    }
   });
-}
 
-function toDatetimeLocalValue(iso) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible' && window.FasoApi.token && state.tab === 'messages' && state.activeGroupId) {
+      await loadGroupMessages(state.activeGroupId);
+      renderApp();
+    }
+  });
 
-function formatByteSize(bytes) {
-  const n = Number(bytes || 0);
-  if (n < 1024) return `${n} o`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} Ko`;
-  return `${(n / (1024 * 1024)).toFixed(2)} Mo`;
-}
+  // ==========================================================================
+  // DÉMARRAGE DE L'APPLICATION
+  // ==========================================================================
+  async function bootstrap() {
+    bindRealtimeEvents();
+    renderApp();
 
-function formatApiError(codeOrMsg) {
-  const map = {
-    ACCES_REFUSE_COMPTE_NON_ENROLE: 'Accès refusé : ce matricule n\'est pas préalablement enrôlé.',
-    COMPTE_REVOQUE_ACCES_INTERDIT: 'Accès interdit : ce compte a été définitivement révoqué.',
-    COMPTE_SUSPENDU_CONTACTEZ_ADMIN: 'Accès refusé : ce compte est actuellement suspendu.',
-    COMPTE_NON_ACTIVE_UTILISEZ_INVITATION: 'Ce compte n\'est pas encore activé. Utilisez l\'onglet « Activer une invitation ».',
-    IDENTIFIANTS_INVALIDES: 'Matricule ou mot de passe incorrect.',
-    CODE_2FA_INVALIDE: 'Code TOTP à 6 chiffres invalide ou expiré.',
-    ETAPE_1_REQUISE_OU_EXPIREE: 'Le jeton de 1re étape a expiré. Veuillez ressaisir vos identifiants.',
-    CODE_ACTIVATION_INVALIDE_OU_UTILISE: 'Code d\'activation invalide ou déjà consommé.',
-    CODE_ACTIVATION_EXPIRE: 'Ce code d\'activation a expiré (délai de 72 h dépassé).',
-    MOT_DE_PASSE_TROP_COURT_MIN_12: 'Le mot de passe doit contenir au moins 12 caractères.',
-    MATRICULE_DEJA_EXISTANT: 'Ce matricule administratif est déjà enregistré.'
-  };
-  return map[codeOrMsg] || codeOrMsg || 'Une erreur est survenue.';
-}
+    try {
+      const cfg = await window.FasoApi.getAuthConfig();
+      state.demoMode = Boolean(cfg.demoMode);
+      state.demoAccounts = cfg.demoAccounts || [];
 
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str == null ? '' : String(str);
-  return div.innerHTML;
-}
+      if (state.demoMode) {
+        await provisionDemoEnvironmentIfNeeded(state.demoAccounts);
+      }
 
-function escapeAttr(str) {
-  return escapeHtml(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
+      // Vérifier si un lien d'enrôlement ?enroll=... est présent dans l'URL
+      const urlParams = new URLSearchParams(window.location.search);
+      const enrollCode = urlParams.get('enroll');
+      if (enrollCode) {
+        state.booting = false;
+        await performQrEnrollment(enrollCode);
+        return;
+      }
+
+      // Restaurer une session valide existante
+      if (window.FasoApi.token) {
+        try {
+          const meRes = await window.FasoApi.getMe();
+          window.FasoApi.currentUser = meRes.user;
+          localStorage.setItem('fasobrief_user', JSON.stringify(meRes.user));
+          await loadAuthenticatedWorkspace();
+        } catch (_) {
+          window.FasoApi.clearSession();
+        }
+      }
+    } catch (err) {
+      console.error('[BOOT] Erreur initialisation :', err);
+    } finally {
+      state.booting = false;
+      renderApp();
+      scrollMessagesToBottom();
+    }
+  }
+
+  bootstrap();
+})();

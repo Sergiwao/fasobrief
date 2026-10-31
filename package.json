@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server/server.js",
     "start:demo": "node -e \"process.env.FASOBRIEF_DEMO_MODE='1'; require('./server/server.js').startServer()\"",
-    "test": "node --test tests/integration.test.js && node tests/run_all_security_tests.js",
+    "test": "node tests/qa_audit.js && node --test tests/integration.test.js && node tests/run_all_security_tests.js",
     "seed": "node server/seed.js",
     "reset-demo": "node server/seed.js --reset"
   },

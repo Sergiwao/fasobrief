@@ -50,3 +50,4 @@ router.post('/notifications/read-all', requireAuth, (req, res) => {
 });
 
 module.exports = router;
+

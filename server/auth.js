@@ -87,14 +87,20 @@ function consumeChallengeToken(challengeToken, expectedUserId) {
 }
 
 /**
- * Étape 1 : Matricule + Mot de passe
+ * Étape 1 : Identifiant (username ou matricule) + Mot de passe
  */
 function authenticateFirstFactor(matricule, password, clientIp) {
-  const cleanMatricule = String(matricule || '').trim().toUpperCase();
-  const user = db.prepare(`SELECT * FROM users WHERE UPPER(matricule) = ?`).get(cleanMatricule);
+  const rawIdent = String(matricule || '').trim();
+  const cleanMatricule = rawIdent.toUpperCase();
+  const cleanUsername = rawIdent.toLowerCase();
+  const user = db.prepare(`
+    SELECT * FROM users
+    WHERE UPPER(matricule) = ? OR (username IS NOT NULL AND LOWER(username) = ?)
+    LIMIT 1
+  `).get(cleanMatricule, cleanUsername);
 
   if (!user || user.is_enrolled !== 1) {
-    logAuditEvent('INTRUSION_ATTEMPT', null, clientIp, `Tentative d'accès non autorisée avec matricule: ${matricule}`);
+    logAuditEvent('INTRUSION_ATTEMPT', null, clientIp, `Tentative d'accès non autorisée avec identifiant: ${matricule}`);
     return { success: false, error: 'COMPTE_NON_ENROLE_OU_INCONNU', code: 403 };
   }
 
@@ -386,6 +392,145 @@ function completeAccountActivation(payload, clientIp) {
   };
 }
 
+function hashQrEnrollToken(rawToken) {
+  return crypto.createHash('sha256').update(`FASOBRIEF_QR_V1:${String(rawToken || '').trim()}`).digest('hex');
+}
+
+function encodeQrPayload(userId, rawToken) {
+  const json = JSON.stringify({ u: userId, t: rawToken });
+  return Buffer.from(json, 'utf8').toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function decodeQrPayload(code) {
+  try {
+    let b64 = String(code || '').trim().replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    const parsed = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
+    if (parsed && typeof parsed.u === 'string' && typeof parsed.t === 'string') {
+      return { userId: parsed.u, token: parsed.t };
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Génère un jeton QR d'enrôlement à usage unique (128 bits, stocké uniquement haché SHA-256)
+ */
+function issueQrEnrollToken(targetUserId, actorId, clientIp = '127.0.0.1') {
+  const user = db.prepare(`SELECT * FROM users WHERE id = ?`).get(targetUserId);
+  if (!user || user.is_enrolled !== 1) {
+    return { success: false, error: 'AGENT_INTROUVABLE', code: 404 };
+  }
+  if (user.is_revoked === 1 || user.status === 'REVOKED') {
+    return { success: false, error: 'AGENT_REVOQUE', code: 409 };
+  }
+
+  // Invalider tout précédent QR non utilisé de cet agent
+  db.prepare(`
+    UPDATE invitations
+    SET used_at = CURRENT_TIMESTAMP
+    WHERE user_id = ? AND used_at IS NULL AND pending_totp_secret = '__QR_ENROLL__'
+  `).run(targetUserId);
+
+  const rawToken = crypto.randomBytes(16).toString('hex');
+  const codeHash = hashQrEnrollToken(rawToken);
+  const expiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
+  const invId = 'qri_' + crypto.randomUUID();
+
+  db.prepare(`
+    INSERT INTO invitations (id, user_id, code_hash, expires_at, pending_totp_secret, created_by)
+    VALUES (?, ?, ?, ?, '__QR_ENROLL__', ?)
+  `).run(invId, targetUserId, codeHash, expiresAt, actorId || targetUserId);
+
+  logAuditEvent('QR_ENROLL_ISSUED', actorId, clientIp, `Nouveau QR code à usage unique généré pour ${user.full_name}`, targetUserId);
+
+  return {
+    success: true,
+    qrPayload: encodeQrPayload(targetUserId, rawToken),
+    expiresAt
+  };
+}
+
+/**
+ * Consomme un QR code d'enrôlement à usage unique et crée une session authentifiée
+ */
+function consumeQrEnrollToken(input, clientIp = '127.0.0.1', options = {}) {
+  let userId = input && input.userId;
+  let rawToken = input && input.token;
+  if (input && input.code) {
+    const decoded = decodeQrPayload(input.code);
+    if (!decoded) {
+      return { success: false, error: 'QR_CODE_INVALIDE', code: 400 };
+    }
+    userId = decoded.userId;
+    rawToken = decoded.token;
+  }
+
+  if (!userId || !rawToken) {
+    return { success: false, error: 'QR_CODE_INVALIDE', code: 400 };
+  }
+
+  const user = db.prepare(`SELECT * FROM users WHERE id = ?`).get(userId);
+  if (!user || user.is_enrolled !== 1) {
+    logAuditEvent('INTRUSION_ATTEMPT', null, clientIp, `Tentative d'accès QR sur compte inconnu: ${userId}`);
+    return { success: false, error: 'COMPTE_NON_ENROLE_OU_INCONNU', code: 403 };
+  }
+  if (user.is_revoked === 1 || user.status === 'REVOKED') {
+    logAuditEvent('REVOKED_ACCESS_ATTEMPT', user.id, clientIp, `Tentative de connexion par QR d'un agent révoqué: ${user.full_name}`);
+    return { success: false, error: 'AGENT_REVOQUE_ACCES_INTERDIT', code: 403 };
+  }
+  if (user.status === 'SUSPENDED') {
+    return { success: false, error: 'COMPTE_SUSPENDU_PAR_ADMINISTRATION', code: 403 };
+  }
+
+  const codeHash = hashQrEnrollToken(rawToken);
+  const inv = db.prepare(`
+    SELECT * FROM invitations
+    WHERE user_id = ? AND code_hash = ? AND used_at IS NULL AND pending_totp_secret = '__QR_ENROLL__'
+    ORDER BY created_at DESC LIMIT 1
+  `).get(user.id, codeHash);
+
+  if (!inv || new Date(inv.expires_at).getTime() < Date.now()) {
+    logAuditEvent('QR_ENROLL_FAILED', user.id, clientIp, `QR code expiré ou déjà utilisé pour ${user.full_name}`);
+    return { success: false, error: 'QR_CODE_EXPIRE_OU_DEJA_UTILISE', code: 403 };
+  }
+
+  // Invalidation atomique immédiate (usage unique)
+  const consumeRes = db.prepare(`
+    UPDATE invitations SET used_at = CURRENT_TIMESTAMP WHERE id = ? AND used_at IS NULL
+  `).run(inv.id);
+  if (consumeRes.changes === 0) {
+    return { success: false, error: 'QR_CODE_EXPIRE_OU_DEJA_UTILISE', code: 403 };
+  }
+
+  if (user.status === 'INVITED') {
+    const newSecret = user.totp_secret || generateBase32Secret(20);
+    db.prepare(`
+      UPDATE users SET status = 'ACTIVE', totp_secret = ?, activated_at = CURRENT_TIMESTAMP WHERE id = ?
+    `).run(newSecret, user.id);
+  }
+
+  const sessionToken = crypto.randomBytes(32).toString('hex');
+  db.prepare(`
+    INSERT INTO sessions (token, user_id, device_id, device_info, is_revoked)
+    VALUES (?, ?, ?, ?, 0)
+  `).run(sessionToken, user.id, options.deviceId || null, options.deviceInfo || 'Terminal Enrôlé par QR');
+
+  logAuditEvent('QR_ENROLL_LOGIN', user.id, clientIp, `Connexion par QR code à usage unique de ${user.full_name}`);
+
+  const freshUser = db.prepare(`SELECT * FROM users WHERE id = ?`).get(user.id);
+  return {
+    success: true,
+    token: sessionToken,
+    user: formatUserPublic(freshUser)
+  };
+}
+
 function formatUserPublic(u) {
   let mutedGroups = [];
   try {
@@ -395,6 +540,7 @@ function formatUserPublic(u) {
   }
   return {
     id: u.id,
+    username: u.username || String(u.matricule || '').toLowerCase(),
     matricule: u.matricule,
     fullName: u.full_name,
     role: u.role,
@@ -402,6 +548,7 @@ function formatUserPublic(u) {
     serviceId: u.service_id || null,
     serviceMinistry: u.service_ministry,
     jobTitle: u.job_title || '',
+    avatarData: u.avatar_data || null,
     notifBrowserEnabled: Boolean(u.notif_browser_enabled),
     notifMutedGroups: mutedGroups
   };
@@ -468,6 +615,8 @@ module.exports = {
   createInvitedAccount,
   initiateAccountActivation,
   completeAccountActivation,
+  issueQrEnrollToken,
+  consumeQrEnrollToken,
   validateSession,
   requireAuth,
   requireRole,

@@ -566,6 +566,114 @@ class FasoCryptoEngine {
   }
 
   /**
+   * Alias d'envoi chiffré dans un groupe (compatible Lovable UI)
+   */
+  async encryptGroupPayload(groupId, payloadObj) {
+    return this.encryptPayload(groupId, payloadObj);
+  }
+
+  /**
+   * Alias de synchronisation des enveloppes et demandes de clés (compatible Lovable UI)
+   */
+  async syncKeysAndRequests() {
+    return this.syncPendingCrypto();
+  }
+
+  /**
+   * Déchiffrement synchrone rapide d'un message Megolm à partir des sessions en mémoire locale
+   */
+  decryptGroupMessage(msgLike) {
+    if (!msgLike || !msgLike.ciphertext) {
+      return { ok: false, text: '[Contenu chiffré absent]' };
+    }
+
+    const sessionId = msgLike.megolm_session_id || msgLike.megolmSessionId;
+    if (!sessionId) {
+      return {
+        ok: false,
+        legacy: true,
+        text: '[Message chiffré issu d\'une ancienne session]'
+      };
+    }
+
+    let inbRecord = null;
+    const groupId = msgLike.conversation_id || msgLike.group_id || msgLike.groupId;
+    if (this.state && this.state.inboundGroupSessions) {
+      if (groupId && this.state.inboundGroupSessions[`${groupId}:${sessionId}`]) {
+        inbRecord = this.state.inboundGroupSessions[`${groupId}:${sessionId}`];
+      } else {
+        for (const k of Object.keys(this.state.inboundGroupSessions)) {
+          if (k.endsWith(`:${sessionId}`)) {
+            inbRecord = this.state.inboundGroupSessions[k];
+            break;
+          }
+        }
+      }
+    }
+
+    if (!inbRecord) {
+      if (this.api && this.deviceId && groupId) {
+        const keyId = `${groupId}:${sessionId}`;
+        if (!this.requestedSessions.has(keyId)) {
+          this.requestedSessions.add(keyId);
+          this.api.requestMegolmKey(groupId, sessionId, this.deviceId).catch(() => {});
+        }
+      }
+      return {
+        ok: false,
+        waitingForKey: true,
+        text: '[Clé de session E2EE en attente de synchronisation]'
+      };
+    }
+
+    const inb = new Olm.InboundGroupSession();
+    try {
+      inb.unpickle(this.pickleKey, inbRecord.pickle);
+      const dec = inb.decrypt(msgLike.ciphertext);
+
+      let signatureVerified = false;
+      const senderEd = msgLike.sender_ed25519 || msgLike.senderEd25519 || inbRecord.senderEd25519;
+      if (msgLike.signature && senderEd) {
+        const util = new Olm.Utility();
+        try {
+          util.ed25519_verify(senderEd, msgLike.ciphertext, msgLike.signature);
+          signatureVerified = true;
+        } catch (_) {
+          signatureVerified = false;
+        } finally {
+          util.free();
+        }
+      }
+
+      try {
+        const parsed = JSON.parse(dec.plaintext);
+        return {
+          ok: true,
+          data: parsed,
+          text: parsed.text || parsed.title || '',
+          signatureVerified,
+          messageIndex: dec.message_index
+        };
+      } catch (_) {
+        return {
+          ok: true,
+          data: { kind: 'text', text: dec.plaintext },
+          text: dec.plaintext,
+          signatureVerified,
+          messageIndex: dec.message_index
+        };
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        text: '[Message chiffré E2EE — Clé non disponible sur ce terminal]'
+      };
+    } finally {
+      inb.free();
+    }
+  }
+
+  /**
    * Déchiffre un payload Megolm et vérifie la signature Ed25519 de l'expéditeur si présente
    */
   async decryptPayload(groupId, msgLike) {
@@ -754,3 +862,8 @@ class FasoCryptoEngine {
 }
 
 window.FasoCrypto = new FasoCryptoEngine();
+if (typeof window.FasoCrypto.encryptGroupPayload !== 'function') {
+  window.FasoCrypto.encryptGroupPayload = function(groupId, payloadObj) {
+    return this.encryptPayload(groupId, payloadObj);
+  };
+}

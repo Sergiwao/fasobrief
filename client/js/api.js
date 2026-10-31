@@ -89,6 +89,17 @@ class FasoApiClient {
     return this.request(`/api/auth/demo-totp/${encodeURIComponent(userId)}`);
   }
 
+  async qrLogin(code, deviceInfo = '') {
+    const res = await this.request('/api/auth/qr-login', {
+      method: 'POST',
+      body: JSON.stringify({ code, deviceInfo })
+    });
+    if (res.success && res.token) {
+      this.setSession(res.token, res.user);
+    }
+    return res;
+  }
+
   async activateStep1(matricule, activationCode) {
     return this.request('/api/auth/activate-step1', {
       method: 'POST',
@@ -124,6 +135,18 @@ class FasoApiClient {
     const res = await this.request('/api/auth/preferences', {
       method: 'PATCH',
       body: JSON.stringify(prefs)
+    });
+    if (res.user) {
+      this.currentUser = res.user;
+      localStorage.setItem('fasobrief_user', JSON.stringify(res.user));
+    }
+    return res;
+  }
+
+  async updateProfile(profileData) {
+    const res = await this.request('/api/auth/profile', {
+      method: 'PATCH',
+      body: JSON.stringify(profileData)
     });
     if (res.user) {
       this.currentUser = res.user;
@@ -284,6 +307,13 @@ class FasoApiClient {
   }
 
   // --- Instructions Administratives FasoBrief ---
+  async prepareInstructionScope(recipientIds) {
+    return this.request('/api/instructions/scope-group', {
+      method: 'POST',
+      body: JSON.stringify({ recipientIds })
+    });
+  }
+
   async createInstruction(payload) {
     return this.request('/api/instructions', {
       method: 'POST',
@@ -366,6 +396,43 @@ class FasoApiClient {
   // --- Administration, Comptes & Audit ---
   async getAdminUsers() {
     return this.request('/api/admin/users');
+  }
+
+  async createAdminService(name) {
+    return this.request('/api/admin/services', {
+      method: 'POST',
+      body: JSON.stringify({ name })
+    });
+  }
+
+  async enrollAdminUser(payload) {
+    return this.request('/api/admin/users', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  }
+
+  async updateAdminUser(userId, payload) {
+    return this.request(`/api/admin/users/${encodeURIComponent(userId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    });
+  }
+
+  async generateUserQr(userId) {
+    return this.request(`/api/admin/users/${encodeURIComponent(userId)}/qr`, {
+      method: 'POST'
+    });
+  }
+
+  async resetDemo() {
+    const res = await this.request('/api/admin/reset-demo', {
+      method: 'POST'
+    });
+    if (res.success && res.token && res.user) {
+      this.setSession(res.token, res.user);
+    }
+    return res;
   }
 
   async createInvitation(payload) {

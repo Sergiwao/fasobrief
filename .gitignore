@@ -31,7 +31,11 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Local AI agent skills metadata
+# Local AI agent skills metadata & temporary reference archives
 .agents/
 skills-lock.json
+docs/reference-ui-prototype/node_modules/
+docs/reference-ui-prototype/dist/
+*.zip
+
 

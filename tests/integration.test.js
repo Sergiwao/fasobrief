@@ -608,3 +608,148 @@ test('5. Suspension, Réactivation et Révocation en direct (fermeture WebSocket
   });
   assert.equal(tryReactivateRevoked.status, 409);
 });
+
+test('6. Enrôlement Admin, Création de Service, Connexion par Identifiant et QR Code à Usage Unique (SHA-256)', async () => {
+  const adminDef = FICTIONAL_USERS.find((u) => u.role === 'ADMIN');
+  const dirDef = FICTIONAL_USERS.find((u) => u.id === 'usr_dir_01');
+
+  // Connexion par identifiant court (username: 'admin' et 'issa')
+  const adminAuth = await loginFull('admin', DEFAULT_PASSWORD, adminDef.totp_secret);
+  const issaAuth = await loginFull('issa', DEFAULT_PASSWORD, dirDef.totp_secret);
+  assert.equal(issaAuth.user.username, 'issa');
+
+  // Création d'un nouveau service par l'administrateur -> canal de service automatique
+  const srvRes = await apiReq('/api/admin/services', {
+    method: 'POST',
+    token: adminAuth.token,
+    body: { name: 'Direction financière' }
+  });
+  assert.equal(srvRes.status, 201);
+  assert.ok(srvRes.data.service.channelId);
+
+  // Enrôlement d'un nouvel agent avec génération de QR code 128 bits à usage unique
+  const enrollRes = await apiReq('/api/admin/users', {
+    method: 'POST',
+    token: adminAuth.token,
+    body: {
+      fullName: 'Salif Traoré',
+      jobTitle: 'Contrôleur budgétaire',
+      username: 'salif',
+      password: 'MotDePasseFort2026!',
+      role: 'AGENT',
+      serviceId: srvRes.data.service.id
+    }
+  });
+  assert.equal(enrollRes.status, 201);
+  assert.ok(enrollRes.data.qrPayload);
+
+  // Vérifier que le jeton QR brut n'apparaît jamais en clair en base SQLite
+  const allInvs = db.prepare(`SELECT * FROM invitations WHERE user_id = ?`).all(enrollRes.data.user.id);
+  assert.equal(allInvs.length, 1);
+  const decodedQr = JSON.parse(Buffer.from(enrollRes.data.qrPayload, 'base64url').toString('utf8'));
+  assert.ok(!JSON.stringify(allInvs[0]).includes(decodedQr.t));
+
+  // Première connexion par QR code -> succès et ouverture du canal de service
+  const qrLogin1 = await apiReq('/api/auth/qr-login', {
+    method: 'POST',
+    body: { code: enrollRes.data.qrPayload }
+  });
+  assert.equal(qrLogin1.status, 200);
+  assert.equal(qrLogin1.data.user.username, 'salif');
+
+  const salifGroups = await apiReq('/api/groups', { token: qrLogin1.data.token });
+  assert.ok(salifGroups.data.groups.some((g) => g.name === 'Direction financière' && g.channelKind === 'service'));
+
+  // Rejeu du même QR code -> rejet strict 403 (usage unique garanti)
+  const qrReplay = await apiReq('/api/auth/qr-login', {
+    method: 'POST',
+    body: { code: enrollRes.data.qrPayload }
+  });
+  assert.equal(qrReplay.status, 403);
+  assert.equal(qrReplay.data.error, 'QR_CODE_EXPIRE_OU_DEJA_UTILISE');
+
+  // Périmètre cryptographique d'instruction multi-services
+  const scopeRes = await apiReq('/api/instructions/scope-group', {
+    method: 'POST',
+    token: issaAuth.token,
+    body: { recipientIds: [enrollRes.data.user.id] }
+  });
+  assert.equal(scopeRes.status, 200);
+  assert.ok(scopeRes.data.groupId.startsWith('grp_iscope_'));
+});
+
+test('7. Création de Groupe par Chef/Admin, Échanges E2EE & Envoi d\'Instruction Chiffrée', async () => {
+  const adminDef = FICTIONAL_USERS.find((u) => u.role === 'ADMIN');
+  const adminAuth = await loginFull('admin', DEFAULT_PASSWORD, adminDef.totp_secret);
+
+  // Récupérer l'annuaire des agents actifs
+  const dirRes = await apiReq('/api/directory', { token: adminAuth.token });
+  assert.equal(dirRes.status, 200);
+  const activeMembers = dirRes.data.agents.filter((a) => a.id !== adminAuth.user.id && a.status === 'ACTIVE');
+  assert.ok(activeMembers.length >= 2, 'Au moins 2 autres agents actifs disponibles');
+
+  // Création de groupe interservices
+  const grpRes = await apiReq('/api/groups', {
+    method: 'POST',
+    token: adminAuth.token,
+    body: {
+      name: 'Comité de Coordination Démo',
+      description: 'Groupe interservices souverain',
+      memberIds: [activeMembers[0].id, activeMembers[1].id]
+    }
+  });
+  assert.equal(grpRes.status, 201);
+  assert.equal(grpRes.data.group.name, 'Comité de Coordination Démo');
+  assert.equal(grpRes.data.group.member_count, 3);
+
+  // Envoi de message chiffré dans le groupe créé
+  const msgRes = await apiReq(`/api/groups/${grpRes.data.group.id}/messages`, {
+    method: 'POST',
+    token: adminAuth.token,
+    body: {
+      protocol: 'megolm.v1',
+      megolmSessionId: 'sess_coordination_test',
+      ciphertext: 'MEGOLM_CIPHERTEXT_COORD_TEST',
+      senderDeviceId: 'dev_adm_coord',
+      senderEd25519: 'ed25519_adm_pubkey',
+      ephemeralKey: 'curve_adm_key',
+      signature: 'sig_coord_test',
+      clientMsgId: 'cmsg_coord_1',
+      messageType: 'CHAT'
+    }
+  });
+  assert.equal(msgRes.status, 200);
+  assert.equal(msgRes.data.message.delivery_status, 'sent');
+
+  // Création d'une instruction administrative chiffrée
+  const instScope = await apiReq('/api/instructions/scope-group', {
+    method: 'POST',
+    token: adminAuth.token,
+    body: { recipientIds: [activeMembers[0].id] }
+  });
+  assert.equal(instScope.status, 200);
+
+  const instRes = await apiReq('/api/instructions', {
+    method: 'POST',
+    token: adminAuth.token,
+    body: {
+      groupId: instScope.data.groupId,
+      titleCiphertext: 'TITRE_INSTRUCTION_CHIFFRE_MEGOLM',
+      megolmSessionId: 'sess_inst_coord',
+      senderEd25519: 'ed25519_adm_pubkey',
+      signature: 'sig_inst_coord',
+      recipientIds: instScope.data.recipientIds,
+      deadline: new Date(Date.now() + 86400000).toISOString()
+    }
+  });
+  assert.equal(instRes.status, 201);
+  assert.ok(instRes.data.instruction.id);
+
+  // Vérification de la présence dans le dashboard
+  const dashRes = await apiReq('/api/instructions/dashboard', { token: adminAuth.token });
+  assert.equal(dashRes.status, 200);
+  assert.ok(dashRes.data.dashboard.some((i) => i.id === instRes.data.instruction.id));
+});
+
+
+

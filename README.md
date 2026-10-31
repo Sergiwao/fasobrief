@@ -62,17 +62,17 @@ npm test             # Exécute les 19 tests automatisés sur une base SQLite te
 
 ## 4. Comptes Fictifs de Démonstration (100 % Fictifs)
 
-Mot de passe commun de démonstration : `FasoSecurite2026!`
+Mot de passe commun de démonstration : `demo2026`
 
-| Nom fictif | Matricule | Rôle | Secret TOTP Base32 (RFC 6238) |
-|---|---|---|---|
-| Ousmane Traoré | `FASO-ADM-00` | `ADMIN` | `JBSWY3DPEHPK3PXP234567ABCDEFGHJK` |
-| Dr. Salif Ouédraogo | `FASO-DIR-01` | `DIRECTEUR` | `FASOBRIEFBURKINAFASODGTD234567AB` |
-| Aminata Sawadogo | `FASO-CHF-02` | `CHEF_SERVICE` | `MZXW6YTBOI5HS2LTMFZW6YTSNRSGK3LP` |
-| Ibrahim Kaboré | `FASO-AGT-03` | `AGENT` | `KRSXG5CTMVRXEZLUKN2XAZLSNF2GS33O` |
-| Mariam Compaoré | `FASO-AGT-04` | `AGENT` | `NBSWY3DPFQQFO33SNRSCC43VNZ2G643F` |
+| Nom fictif | Identifiant | Matricule | Rôle | Service | Secret TOTP Base32 (RFC 6238) |
+|---|---|---|---|---|---|
+| Awa Compaoré | `admin` | `FASO-ADM-00` | `ADMIN` | Administration | `JBSWY3DPEHPK3PXP234567ABCDEFGHJK` |
+| Issa Ouédraogo | `issa` | `FASO-DIR-01` | `DIRECTEUR` | Cabinet | `FASOBRIEFBURKINAFASODGTD234567AB` |
+| Fatou Zongo | `fatou` | `FASO-CHF-02` | `CHEF_SERVICE` | Direction des études | `MZXW6YTBOI5HS2LTMFZW6YTSNRSGK3LP` |
+| Paul Kaboré | `paul` | `FASO-AGT-03` | `AGENT` | Cabinet | `KRSXG5CTMVRXEZLUKN2XAZLSNF2GS33O` |
+| Mariam Sawadogo | `mariam` | `FASO-AGT-04` | `AGENT` | Direction des études | `NBSWY3DPFQQFO33SNRSCC43VNZ2G643F` |
 
-> En lançant `npm run start:demo` (`FASOBRIEF_DEMO_MODE=1`), l'écran de connexion affiche un sélecteur de comptes fictifs et un bouton « Insérer code TOTP démo » réservé à l'évaluation du jury. En mode normal (`npm start`), aucun générateur TOTP ni code statique n'est accessible.
+> En lançant `npm run start:demo` (`FASOBRIEF_DEMO_MODE=1`), l'écran de connexion affiche l'aide TOTP dynamique de démonstration réservée à l'évaluation du jury. En mode normal (`npm start`), aucun générateur TOTP ni code statique n'est accessible.
 
 ---
 

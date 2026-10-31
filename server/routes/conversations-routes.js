@@ -76,6 +76,7 @@ function enrichGroupForUser(groupRow, currentUserId) {
   if (groupRow.type === 'DIRECT') {
     const peer = db.prepare(`
       SELECT u.id, u.matricule, u.full_name AS fullName, u.role, u.job_title AS jobTitle,
+             u.avatar_data AS avatarData,
              u.service_ministry AS serviceMinistry, u.status
       FROM group_members gm
       JOIN users u ON u.id = gm.user_id
@@ -97,12 +98,17 @@ function enrichGroupForUser(groupRow, currentUserId) {
   `).get(currentUserId, groupRow.id, currentUserId);
 
   const lastMsgRow = db.prepare(`
-    SELECT created_at, message_type FROM messages WHERE group_id = ? ORDER BY created_at DESC LIMIT 1
+    SELECT id, group_id, sender_id, protocol, megolm_session_id, ciphertext,
+           sender_ed25519, signature, message_type, created_at
+    FROM messages
+    WHERE group_id = ?
+    ORDER BY created_at DESC LIMIT 1
   `).get(groupRow.id);
 
   return {
     id: groupRow.id,
     type: groupRow.type || 'GROUP',
+    channelKind: groupRow.channel_kind || (groupRow.type === 'DIRECT' ? 'direct' : (groupRow.service_id ? 'service' : 'group')),
     name: displayName,
     rawName: groupRow.name,
     description: groupRow.description || '',
@@ -114,6 +120,7 @@ function enrichGroupForUser(groupRow, currentUserId) {
     unreadCount: (unreadRow && unreadRow.cnt) || 0,
     lastMessageAt: lastMsgRow ? lastMsgRow.created_at : groupRow.created_at,
     lastMessageType: lastMsgRow ? lastMsgRow.message_type : null,
+    lastMessage: lastMsgRow || null,
     peerUser,
     created_at: groupRow.created_at
   };
@@ -132,6 +139,7 @@ router.get('/groups', requireAuth, (req, res) => {
     FROM groups g
     JOIN group_members gm ON g.id = gm.group_id
     WHERE gm.user_id = ? AND g.is_active = 1
+      AND COALESCE(g.channel_kind, 'group') != 'instruction_scope'
   `).all(req.user.id);
 
   const groups = rows
@@ -226,8 +234,8 @@ router.post('/groups', requireAuth, requireRole('ADMIN', 'DIRECTEUR', 'CHEF_SERV
 
   const groupId = 'grp_' + crypto.randomUUID();
   db.prepare(`
-    INSERT INTO groups (id, type, name, description, service_id, service_ministry, created_by, is_active)
-    VALUES (?, 'GROUP', ?, ?, ?, ?, ?, 1)
+    INSERT INTO groups (id, type, channel_kind, name, description, service_id, service_ministry, created_by, is_active)
+    VALUES (?, 'GROUP', 'group', ?, ?, ?, ?, ?, 1)
   `).run(
     groupId,
     cleanName,
@@ -483,6 +491,7 @@ router.get('/groups/:groupId/messages', requireAuth, (req, res) => {
            m.protocol, m.megolm_session_id, m.ciphertext, m.sender_ed25519, m.signature,
            m.iv, m.tag, m.ephemeral_key, m.message_type, m.created_at,
            u.full_name AS sender_name, u.matricule AS sender_matricule,
+           u.avatar_data AS sender_avatar,
            ef.id AS file_id, ef.file_size, ef.mime_type, ef.sha256_ciphertext,
            inst.id AS instruction_id, inst.instruction_ref, inst.status AS instruction_status,
            inst.deadline, inst.version AS instruction_version, inst.priority AS instruction_priority,
@@ -892,3 +901,4 @@ router.get('/files/:fileId', requireAuth, (req, res) => {
 });
 
 module.exports = router;
+

@@ -11,6 +11,7 @@ const {
   verifySecondFactor,
   initiateAccountActivation,
   completeAccountActivation,
+  consumeQrEnrollToken,
   requireAuth,
   logAuditEvent,
   formatUserPublic
@@ -28,14 +29,15 @@ router.get('/config', (req, res) => {
   let demoAccounts = [];
   if (demoMode) {
     demoAccounts = db.prepare(`
-      SELECT id, matricule, full_name AS fullName, role, status, service_ministry AS serviceMinistry
+      SELECT id, username, matricule, full_name AS fullName, job_title AS jobTitle,
+             role, status, service_id AS serviceId, service_ministry AS serviceMinistry
       FROM users
-      WHERE id IN ('usr_dir_01', 'usr_chef_02', 'usr_agent_03', 'usr_agent_04', 'usr_admin_00')
+      WHERE id IN ('usr_admin_00', 'usr_dir_01', 'usr_chef_02', 'usr_agent_03', 'usr_agent_04')
       ORDER BY CASE role
-        WHEN 'DIRECTEUR' THEN 1
-        WHEN 'CHEF_SERVICE' THEN 2
-        WHEN 'AGENT' THEN 3
-        WHEN 'ADMIN' THEN 4
+        WHEN 'ADMIN' THEN 1
+        WHEN 'DIRECTEUR' THEN 2
+        WHEN 'CHEF_SERVICE' THEN 3
+        WHEN 'AGENT' THEN 4
       END
     `).all();
   }
@@ -130,6 +132,18 @@ router.post('/activate-step2', (req, res) => {
   res.json(result);
 });
 
+/**
+ * Connexion / enrôlement par scan d'un QR code à usage unique (128 bits haché SHA-256)
+ */
+router.post('/qr-login', (req, res) => {
+  const { code, userId, token, deviceId, deviceInfo } = req.body || {};
+  const result = consumeQrEnrollToken({ code, userId, token }, req.ip, { deviceId, deviceInfo });
+  if (!result.success) {
+    return res.status(result.code || 403).json({ error: result.error });
+  }
+  res.json(result);
+});
+
 router.get('/me', requireAuth, (req, res) => {
   res.json({
     user: req.user,
@@ -165,4 +179,61 @@ router.patch('/preferences', requireAuth, (req, res) => {
   res.json({ success: true, user: formatUserPublic(updated) });
 });
 
+/**
+ * Modification de son propre profil par l'agent connecté :
+ * - Champs modifiables : Nom complet (fullName), Poste/Titre (jobTitle), Photo de profil (avatarData)
+ * - Champs verrouillés (immutables par l'agent) : Matricule, Rôle, Service d'affectation
+ */
+router.patch('/profile', requireAuth, (req, res) => {
+  const { fullName, jobTitle, avatarData } = req.body || {};
+
+  // Sécurité souveraine : l'agent ne peut PAS modifier ses attributs administratifs
+  if (req.body.matricule !== undefined && req.body.matricule !== req.user.matricule) {
+    return res.status(403).json({ error: 'MODIFICATION_MATRICULE_INTERDITE' });
+  }
+  if (req.body.role !== undefined && req.body.role !== req.user.role) {
+    return res.status(403).json({ error: 'MODIFICATION_ROLE_INTERDITE' });
+  }
+  if (req.body.serviceId !== undefined && req.body.serviceId !== req.user.serviceId) {
+    return res.status(403).json({ error: 'MODIFICATION_SERVICE_INTERDITE' });
+  }
+
+  const current = db.prepare(`SELECT * FROM users WHERE id = ?`).get(req.user.id);
+  if (!current) {
+    return res.status(404).json({ error: 'UTILISATEUR_INTROUVABLE' });
+  }
+
+  const nextFullName = typeof fullName === 'string' && fullName.trim().length >= 2
+    ? fullName.trim()
+    : current.full_name;
+
+  const nextJobTitle = typeof jobTitle === 'string'
+    ? jobTitle.trim()
+    : current.job_title;
+
+  let nextAvatar = current.avatar_data;
+  if (avatarData === null || avatarData === '') {
+    nextAvatar = null;
+  } else if (typeof avatarData === 'string') {
+    // Vérifier format data URL image et limiter à 500 Ko
+    if (avatarData.startsWith('data:image/') && avatarData.length <= 500000) {
+      nextAvatar = avatarData;
+    } else {
+      return res.status(400).json({ error: 'AVATAR_INVALIDE_OU_TROP_VOLUMINEUX' });
+    }
+  }
+
+  db.prepare(`
+    UPDATE users
+    SET full_name = ?, job_title = ?, avatar_data = ?
+    WHERE id = ?
+  `).run(nextFullName, nextJobTitle, nextAvatar, req.user.id);
+
+  logAuditEvent('USER_PROFILE_UPDATED', req.user.id, req.ip, `Mise à jour du profil de ${req.user.matricule}`);
+
+  const updated = db.prepare(`SELECT * FROM users WHERE id = ?`).get(req.user.id);
+  res.json({ success: true, user: formatUserPublic(updated) });
+});
+
 module.exports = router;
+
