@@ -37,6 +37,8 @@ AGENTS.md
 FasoBrief_Prompt_AntiGravity.md
 Sprint_Technique_Pre-Hackathon_2026-KFD.pdf
 *.pdf
+docs/*.html
+generate_submission_pdf.py
 docs/reference-ui-prototype/
 skills-lock.json
 *.zip
