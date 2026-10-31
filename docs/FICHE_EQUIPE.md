@@ -10,7 +10,7 @@
 * **Établissement d'enseignement supérieur :** [À compléter par l'équipe - ex. Université Joseph Ki-Zerbo / Université Nazi Boni / ESI / IBAM / Thomas Sankara]
 * **Ville :** Ouagadougou / Bobo-Dioulasso, Burkina Faso
 * **Nom du projet :** FasoBrief — Messagerie Souveraine & Suivi des Instructions Administratives
-* **Dépôt Git Public :** [URL du dépôt GitHub / GitLab public]
+* **Dépôt Git Public :** https://github.com/Sergiwao/fasobrief
 
 ---
 
