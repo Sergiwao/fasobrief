@@ -172,7 +172,12 @@ class FasoCryptoEngine {
   /**
    * Synchronise de manière séquentielle les enveloppes Olm entrantes et les demandes de clés Megolm
    */
-  async syncPendingCrypto() {
+  async syncPendingCrypto(force = false) {
+    const now = Date.now();
+    if (!force && this._lastSyncTime && (now - this._lastSyncTime < 5000)) {
+      return Promise.resolve();
+    }
+    this._lastSyncTime = now;
     this._syncLock = this._syncLock
       .then(async () => {
         await this._pullAndProcessEnvelopes();

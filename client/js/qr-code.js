@@ -398,14 +398,27 @@
           return;
         }
         const video = document.createElement('video');
-        video.setAttribute('playsinline', 'true');
+        video.setAttribute('playsinline', '');
+        video.setAttribute('webkit-playsinline', '');
+        video.playsInline = true;
         video.muted = true;
+        video.defaultMuted = true;
         video.autoplay = true;
         video.className = 'qr-video-preview';
         video.srcObject = stream;
         containerEl.innerHTML = '';
+        containerEl.style.position = 'relative';
         containerEl.appendChild(video);
-        await video.play();
+
+        // Réticule visuel et rayon laser
+        const overlay = document.createElement('div');
+        overlay.className = 'qr-scanner-overlay';
+        overlay.innerHTML = '<div class="qr-target-box"><div class="qr-laser-line"></div></div>';
+        containerEl.appendChild(overlay);
+
+        try {
+          await video.play();
+        } catch (_) {}
 
         if (typeof window.BarcodeDetector === 'function') {
           const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
@@ -425,12 +438,14 @@
             rafId = requestAnimationFrame(scanLoop);
           };
           rafId = requestAnimationFrame(scanLoop);
-        } else if (onError) {
-          onError('Scannez le QR code directement avec l\'appareil photo du téléphone ou collez le lien ci-dessous.');
+        } else {
+          // Si BarcodeDetector n'est pas activé dans ce navigateur, on laisse la vidéo active
+          // et on informe discrètement l'utilisateur de pointer son appareil photo natif ou d'utiliser le bouton photo
+          console.info('[QR] BarcodeDetector natif non supporté par ce navigateur mobile, prévisualisation vidéo active.');
         }
       } catch (err) {
         if (!stopped && onError) {
-          onError('Caméra indisponible ou accès refusé. Vous pouvez scanner avec l\'appareil photo natif ou coller le lien d\'enrôlement.');
+          onError('Accès caméra refusé ou indisponible. Vous pouvez scanner avec l\'appareil photo natif ou coller le lien d\'enrôlement.');
         }
       }
     })();

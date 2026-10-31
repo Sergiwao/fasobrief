@@ -262,6 +262,12 @@ class FasoApiClient {
     });
   }
 
+  async deleteGroup(groupId) {
+    return this.request(`/api/groups/${encodeURIComponent(groupId)}`, {
+      method: 'DELETE'
+    });
+  }
+
   // --- Messages, Accusés Réels & Pièces Jointes E2EE ---
   async getMessages(groupId) {
     return this.request(`/api/groups/${encodeURIComponent(groupId)}/messages`);

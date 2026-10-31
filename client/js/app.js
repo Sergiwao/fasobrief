@@ -40,7 +40,9 @@
     userCheck: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/></svg>`,
     history: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>`,
     rotateCcw: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`,
-    refreshCw: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>`
+    refreshCw: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>`,
+    settings: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
+    trash2: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>`
   };
 
   const ROLE_LABELS = {
@@ -244,117 +246,13 @@
   }
 
   // ==========================================================================
-  // PRÉ-PROVISIONNEMENT E2EE RÉEL OLM/MEGOLM EN MODE DÉMO UNIQUEMENT
+  // INITIALISATION DU MOTEUR CRYPTOGRAPHIQUE CLIENT (0 REQUÊTE PARASITE)
   // ==========================================================================
-  async function provisionDemoEnvironmentIfNeeded(demoAccounts) {
-    if (!Array.isArray(demoAccounts) || demoAccounts.length === 0) return;
-
-    const missingDevices = demoAccounts.filter(
-      (acc) => acc.status === 'ACTIVE' && !localStorage.getItem(`fasobrief_olm_v2_${acc.id}`)
-    );
-    const seededMsgFlag = localStorage.getItem('fasobrief_lovable_demo_msgs_v1');
-
-    if (missingDevices.length === 0 && seededMsgFlag === '1') return;
-
-    const savedToken = localStorage.getItem('fasobrief_token');
-    const savedUser = localStorage.getItem('fasobrief_user');
-    const tempTokens = new Map();
-
+  async function provisionDemoEnvironmentIfNeeded() {
     try {
       await window.FasoCrypto.init();
-      for (const acc of demoAccounts) {
-        if (acc.status !== 'ACTIVE') continue;
-        const tempApi = Object.create(window.FasoApi);
-        tempApi.token = null;
-        tempApi.currentUser = null;
-        tempApi.setSession = function (tok, usr) {
-          this.token = tok;
-          this.currentUser = usr;
-        };
-
-        try {
-          const s1 = await tempApi.loginStep1(acc.matricule, 'demo2026');
-          const totpRes = await tempApi.getDemoTotp(s1.userId);
-          await tempApi.loginStep2(s1.userId, totpRes.code, s1.challengeToken, 'Terminal Démo E2EE');
-          await window.FasoCrypto.bindUserSession(s1.userId, tempApi);
-          tempTokens.set(acc.id, tempApi);
-        } catch (_) {
-          // Compte modifié ou révoqué : ignorer silencieusement
-        }
-      }
-
-      // Chiffrer les messages initiaux de démonstration via Olm + Megolm si les canaux sont vierges
-      if (seededMsgFlag !== '1' && tempTokens.size > 0) {
-        const seedSamples = [
-          {
-            senderId: 'usr_dir_01',
-            groupId: 'grp_service_cabinet_01',
-            text: 'Bonjour, merci de préparer la note de synthèse avant 16h.'
-          },
-          {
-            senderId: 'usr_agent_03',
-            groupId: 'grp_service_cabinet_01',
-            text: 'Bien reçu monsieur le directeur, j\'y travaille.'
-          },
-          {
-            senderId: 'usr_chef_02',
-            groupId: 'grp_service_demat_02',
-            text: 'Point d\'équipe à 10h sur le dossier en cours.'
-          },
-          {
-            senderId: 'usr_dir_01',
-            groupId: 'grp_comite_chefs_03',
-            text: 'Merci de remonter vos besoins budgétaires avant vendredi.'
-          }
-        ];
-
-        for (const sample of seedSamples) {
-          const senderApi = tempTokens.get(sample.senderId);
-          if (!senderApi) continue;
-          try {
-            const hist = await senderApi.getMessages(sample.groupId);
-            if (hist.messages && hist.messages.length > 0) continue;
-            await window.FasoCrypto.bindUserSession(sample.senderId, senderApi);
-            const enc = await encryptGroupPayloadSafely(sample.groupId, {
-              v: 2,
-              kind: 'text',
-              text: sample.text
-            });
-            await senderApi.sendEncryptedMessage(sample.groupId, {
-              ...enc,
-              clientMsgId: `seed_${sample.groupId}_${sample.senderId}`,
-              messageType: 'CHAT'
-            });
-          } catch (_) {}
-        }
-
-        // Synchroniser les enveloppes Olm pour les destinataires démo
-        for (const [uid, tApi] of tempTokens.entries()) {
-          try {
-            await window.FasoCrypto.bindUserSession(uid, tApi);
-            await window.FasoCrypto.syncKeysAndRequests();
-          } catch (_) {}
-        }
-        localStorage.setItem('fasobrief_lovable_demo_msgs_v1', '1');
-      }
-
-      for (const [, tApi] of tempTokens.entries()) {
-        try {
-          await tApi.request('/api/auth/logout', { method: 'POST' });
-        } catch (_) {}
-      }
-    } finally {
-      if (savedToken && savedUser) {
-        localStorage.setItem('fasobrief_token', savedToken);
-        localStorage.setItem('fasobrief_user', savedUser);
-        window.FasoApi.token = savedToken;
-        window.FasoApi.currentUser = JSON.parse(savedUser);
-      } else {
-        localStorage.removeItem('fasobrief_token');
-        localStorage.removeItem('fasobrief_user');
-        window.FasoApi.token = null;
-        window.FasoApi.currentUser = null;
-      }
+    } catch (e) {
+      console.warn('[CRYPTO] Init non bloquante :', e);
     }
   }
 
@@ -621,6 +519,25 @@
     });
 
     window.FasoApi.on('CONVERSATION_CREATED', async () => {
+      await refreshGroups();
+      renderApp();
+    });
+
+    window.FasoApi.on('GROUP_UPDATED', async (data) => {
+      await refreshGroups();
+      if (state.activeGroupId && data && data.groupId === state.activeGroupId) {
+        await loadGroupMessages(state.activeGroupId);
+      }
+      renderApp();
+    });
+
+    window.FasoApi.on('GROUP_DELETED', async (data) => {
+      if (data && data.groupId === state.activeGroupId) {
+        state.activeGroupId = null;
+        if (state.modal && state.modal.type === 'editGroup') {
+          closeModal();
+        }
+      }
       await refreshGroups();
       renderApp();
     });
@@ -917,7 +834,18 @@
               </form>
               ${state.scanningQr ? `
                 <div class="qr-scan-box">
-                  <div id="qrCameraContainer" class="qr-camera-stage">Ouverture de la caméra...</div>
+                  <div id="qrCameraContainer" class="qr-camera-stage" style="position:relative; width:100%; height:220px; overflow:hidden; border-radius:12px; background:#111;">
+                    <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#fff; font-size:0.8125rem;">
+                      Démarrage de la caméra...
+                    </div>
+                  </div>
+                  <div style="display:flex; gap:6px;">
+                    <input type="file" id="qrPhotoInput" accept="image/*" capture="environment" style="display:none;" />
+                    <button type="button" id="qrPhotoBtn" class="btn btn-outline btn-sm" style="flex:1;">
+                      ${ICONS.smartphone}
+                      <span>Prendre en photo le QR</span>
+                    </button>
+                  </div>
                   <div style="display:flex; gap:6px;">
                     <input id="qrManualInput" class="input" type="text" placeholder="Ou coller le lien ?enroll=..." />
                     <button type="button" id="qrManualSubmitBtn" class="btn btn-outline btn-sm">Valider</button>
@@ -1297,9 +1225,16 @@
                   ${Number(activeConv.member_count || 1)} membre${Number(activeConv.member_count || 1) > 1 ? 's' : ''} · ${activeConv.channelKind === 'service' ? 'Service' : 'Groupe'}
                 </p>
               </div>
-              <div class="chat-lock-pill" title="Chiffré de bout en bout (Olm / Megolm)">
-                ${ICONS.lock}
-                <span>Accès restreint</span>
+              <div style="display:flex; align-items:center; gap:8px;">
+                ${(activeConv.channelKind === 'group' || activeConv.type === 'GROUP') && (activeConv.created_by === me.id || activeConv.my_member_role === 'OWNER' || activeConv.my_member_role === 'ADMIN' || me.role === 'ADMIN') ? `
+                  <button type="button" id="openEditGroupBtn" class="btn-icon" aria-label="Paramètres du groupe" title="Gérer le groupe" style="padding:6px; border-radius:8px; border:1px solid var(--border-subtle); background:var(--surface-bg); display:inline-flex; align-items:center; justify-content:center; cursor:pointer;">
+                    ${ICONS.settings}
+                  </button>
+                ` : ''}
+                <div class="chat-lock-pill" title="Chiffré de bout en bout (Olm / Megolm)">
+                  ${ICONS.lock}
+                  <span>Accès restreint</span>
+                </div>
               </div>
             </header>
 
@@ -1876,6 +1811,162 @@
           showToast('Impossible de créer le groupe', err.message, true);
         }
       });
+    } else if (type === 'editGroup') {
+      const grp = data.group;
+      const members = data.members || [];
+      const isOwner = grp.created_by === me.id || grp.my_member_role === 'OWNER' || grp.my_member_role === 'ADMIN' || me.role === 'ADMIN';
+      const nonMembers = state.directoryAgents.filter((u) => {
+        return u.status === 'ACTIVE' && !members.some((m) => m.id === u.id);
+      });
+
+      modalRoot.innerHTML = `
+        <div class="modal-backdrop" id="modalBackdrop">
+          <div class="modal-dialog max-w-lg" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+            <div class="modal-head">
+              <h2 id="modalTitle" class="modal-title">Paramètres du groupe</h2>
+              <button type="button" class="btn-icon js-close-modal" aria-label="Fermer">${ICONS.x}</button>
+            </div>
+            <div class="modal-body" style="max-height: calc(85vh - 120px); overflow-y: auto; padding: 16px 24px;">
+              <form id="editGroupInfoForm" class="modal-form" style="margin-bottom: 20px;">
+                <div class="field-group">
+                  <label class="field-label" for="editGrpName">Nom du groupe</label>
+                  <input id="editGrpName" class="input" type="text" value="${esc(grp.name)}" required ${!isOwner ? 'disabled' : ''} />
+                </div>
+                <div class="field-group">
+                  <label class="field-label" for="editGrpDesc">Description</label>
+                  <input id="editGrpDesc" class="input" type="text" value="${esc(grp.description || '')}" placeholder="Description du groupe..." ${!isOwner ? 'disabled' : ''} />
+                </div>
+                ${isOwner ? `
+                  <button type="submit" class="btn btn-secondary btn-sm" style="margin-top: 4px;">Mettre à jour les informations</button>
+                ` : ''}
+              </form>
+
+              <div class="field-group" style="margin-bottom: 20px;">
+                <label class="field-label">Membres actuels (${members.length})</label>
+                <div class="checklist-box" style="max-height: 180px;">
+                  ${members.map((m) => {
+                    const isGroupOwner = m.id === grp.created_by || m.memberRole === 'OWNER';
+                    const canRemove = isOwner && !isGroupOwner && m.id !== me.id;
+                    return `
+                      <div class="checklist-row" style="display:flex; align-items:center; justify-content:space-between; padding:8px 12px;">
+                        <div class="checklist-info">
+                          <p class="checklist-name" style="font-weight:600;">${esc(m.fullName || m.full_name)}</p>
+                          <p class="checklist-sub" style="font-size:12px; color:var(--text-muted);">${esc(roleLabel(m.role))} · <span class="badge ${isGroupOwner ? 'badge-primary' : 'badge-subtle'}">${isGroupOwner ? 'Propriétaire' : 'Membre'}</span></p>
+                        </div>
+                        ${canRemove ? `
+                          <button type="button" class="btn-icon js-remove-member-btn" data-user-id="${esc(m.id)}" title="Retirer ce membre" style="color:#B91C1C; cursor:pointer;">
+                            ${ICONS.userX || ICONS.x}
+                          </button>
+                        ` : ''}
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
+
+              ${isOwner && nonMembers.length > 0 ? `
+                <div class="field-group" style="margin-bottom: 24px;">
+                  <label class="field-label" for="addMemberSelect">Ajouter un nouveau membre</label>
+                  <div style="display:flex; gap:8px;">
+                    <select id="addMemberSelect" class="input" style="flex:1;">
+                      <option value="">Sélectionner un agent de l'annuaire...</option>
+                      ${nonMembers.map((u) => `
+                        <option value="${esc(u.id)}">${esc(u.fullName)} (${esc(roleLabel(u.role))})</option>
+                      `).join('')}
+                    </select>
+                    <button type="button" id="addMemberBtn" class="btn btn-primary btn-sm">Ajouter</button>
+                  </div>
+                </div>
+              ` : ''}
+
+              ${isOwner ? `
+                <div style="padding-top: 16px; border-top: 1px solid var(--border-subtle);">
+                  <label class="field-label" style="color:#B91C1C; font-weight:600;">Zone sensible</label>
+                  <p class="text-xs text-muted" style="margin-bottom: 10px; font-size:12px;">La dissolution supprime définitivement le groupe et son historique pour tous les membres.</p>
+                  <button type="button" id="dissolveGroupBtn" class="btn btn-danger btn-sm" style="background-color:#B91C1C; color:#fff; border:none; padding:8px 16px; border-radius:8px; cursor:pointer; font-weight:600; display:inline-flex; align-items:center; gap:6px;">
+                    ${ICONS.trash2} Dissoudre le groupe
+                  </button>
+                </div>
+              ` : ''}
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-ghost js-close-modal">Fermer</button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      const editForm = document.getElementById('editGroupInfoForm');
+      if (editForm) {
+        editForm.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const newName = document.getElementById('editGrpName').value.trim();
+          const newDesc = document.getElementById('editGrpDesc').value.trim();
+          if (!newName) return;
+          try {
+            await window.FasoApi.updateGroup(grp.id, { name: newName, description: newDesc });
+            showToast('Informations du groupe mises à jour');
+            await refreshGroups();
+            closeModal();
+            renderApp();
+          } catch (err) {
+            showToast('Erreur modification', err.message, true);
+          }
+        });
+      }
+
+      modalRoot.querySelectorAll('.js-remove-member-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const uid = btn.dataset.userId;
+          if (!confirm('Retirer cet agent du groupe ?')) return;
+          try {
+            await window.FasoApi.removeGroupMember(grp.id, uid);
+            showToast('Membre retiré du groupe');
+            const updated = await window.FasoApi.getGroupDetails(grp.id);
+            state.modal.data.members = updated.members || [];
+            await refreshGroups();
+            renderModal();
+          } catch (err) {
+            showToast('Erreur retrait', err.message, true);
+          }
+        });
+      });
+
+      const addBtn = document.getElementById('addMemberBtn');
+      if (addBtn) {
+        addBtn.addEventListener('click', async () => {
+          const sel = document.getElementById('addMemberSelect');
+          const uid = sel.value;
+          if (!uid) return;
+          try {
+            await window.FasoApi.addGroupMembers(grp.id, [uid]);
+            showToast('Membre ajouté au groupe');
+            const updated = await window.FasoApi.getGroupDetails(grp.id);
+            state.modal.data.members = updated.members || [];
+            await refreshGroups();
+            renderModal();
+          } catch (err) {
+            showToast('Erreur ajout', err.message, true);
+          }
+        });
+      }
+
+      const dissolveBtn = document.getElementById('dissolveGroupBtn');
+      if (dissolveBtn) {
+        dissolveBtn.addEventListener('click', async () => {
+          if (!confirm(`Êtes-vous sûr de vouloir dissoudre définitivement le groupe « ${grp.name} » ?`)) return;
+          try {
+            await window.FasoApi.deleteGroup(grp.id);
+            closeModal();
+            state.activeGroupId = null;
+            await refreshGroups();
+            showToast('Groupe dissous');
+            renderApp();
+          } catch (err) {
+            showToast('Erreur dissolution', err.message, true);
+          }
+        });
+      }
     } else if (type === 'instruction') {
       const recipientsPool = state.directoryAgents.filter(
         (u) => u.id !== me.id && u.status === 'ACTIVE'
@@ -2465,21 +2556,21 @@
       });
     });
     document.querySelectorAll('.js-nav-tab').forEach((btn) => {
-      btn.addEventListener('click', async () => {
+      btn.addEventListener('click', () => {
         const nextTab = btn.dataset.tab;
         state.tab = nextTab;
         state.notifPopoverOpen = false;
         renderNotifPopover();
-        if (nextTab === 'messages') {
-          await refreshGroups();
-          if (state.activeGroupId) await loadGroupMessages(state.activeGroupId);
-        } else if (nextTab === 'instructions') {
-          await refreshInstructions();
-        } else if (nextTab === 'admin') {
-          await refreshAdminData();
-        }
         renderApp();
-        if (nextTab === 'messages') scrollMessagesToBottom();
+        if (nextTab === 'messages') {
+          scrollMessagesToBottom();
+          refreshGroups().then(() => renderApp());
+          if (state.activeGroupId) loadGroupMessages(state.activeGroupId).then(() => { renderApp(); scrollMessagesToBottom(); });
+        } else if (nextTab === 'instructions') {
+          refreshInstructions().then(() => renderApp());
+        } else if (nextTab === 'admin') {
+          refreshAdminData().then(() => renderApp());
+        }
       });
     });
 
@@ -2540,14 +2631,37 @@
       });
     }
 
+    const editGrpBtn = document.getElementById('openEditGroupBtn');
+    if (editGrpBtn && state.activeGroupId) {
+      editGrpBtn.addEventListener('click', async () => {
+        try {
+          const res = await window.FasoApi.getGroupDetails(state.activeGroupId);
+          await refreshDirectory();
+          state.modal = {
+            type: 'editGroup',
+            data: {
+              group: res.group,
+              members: res.members || []
+            }
+          };
+          renderModal();
+        } catch (err) {
+          showToast('Impossible d\'ouvrir les paramètres', err.message, true);
+        }
+      });
+    }
+
     document.querySelectorAll('.js-select-conv').forEach((btn) => {
-      btn.addEventListener('click', async () => {
+      btn.addEventListener('click', () => {
         const gid = btn.dataset.groupId;
         state.activeGroupId = gid;
         state.mobileChatListOpen = false;
-        await loadGroupMessages(gid);
         renderApp();
         scrollMessagesToBottom();
+        loadGroupMessages(gid).then(() => {
+          renderApp();
+          scrollMessagesToBottom();
+        });
       });
     });
 

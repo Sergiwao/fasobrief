@@ -358,6 +358,32 @@ router.patch('/groups/:groupId', requireAuth, (req, res) => {
 });
 
 /**
+ * Dissolution / suppression d'un groupe (propriétaire ou administrateur)
+ */
+router.delete('/groups/:groupId', requireAuth, (req, res) => {
+  const { groupId } = req.params;
+  const grp = db.prepare(`SELECT * FROM groups WHERE id = ?`).get(groupId);
+  if (!grp) {
+    return res.status(404).json({ error: 'GROUPE_INTROUVABLE' });
+  }
+
+  if (grp.type === 'DIRECT') {
+    return res.status(400).json({ error: 'SUPPRESSION_DIRECT_INTERDITE' });
+  }
+
+  if (!canManageGroup(groupId, req.user)) {
+    return res.status(403).json({ error: 'SUPPRESSION_GROUPE_INTERDITE' });
+  }
+
+  broadcastToGroup(groupId, { type: 'GROUP_DELETED', groupId, name: grp.name });
+  db.prepare(`DELETE FROM groups WHERE id = ?`).run(groupId);
+
+  logAuditEvent('GROUP_DELETED', req.user.id, req.ip, `Suppression du groupe ${grp.name} (${groupId})`);
+
+  res.json({ success: true, groupId });
+});
+
+/**
  * Ajout de membres dans un groupe
  */
 router.post('/groups/:groupId/members', requireAuth, (req, res) => {

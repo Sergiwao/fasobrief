@@ -33,9 +33,12 @@ Thumbs.db
 
 # Local AI agent skills metadata & temporary reference archives
 .agents/
+AGENTS.md
+FasoBrief_Prompt_AntiGravity.md
+Sprint_Technique_Pre-Hackathon_2026-KFD.pdf
+*.pdf
+docs/reference-ui-prototype/
 skills-lock.json
-docs/reference-ui-prototype/node_modules/
-docs/reference-ui-prototype/dist/
 *.zip
 
 

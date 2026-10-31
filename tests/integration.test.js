@@ -70,10 +70,16 @@ async function loginFull(matricule, password, totpSecret) {
 test.before(async () => {
   await Olm.init();
   seedDatabase({ forceReset: true });
-  await startServer(0);
-  const port = server.address().port;
-  baseUrl = `http://127.0.0.1:${port}`;
-  wsUrl = `ws://127.0.0.1:${port}/ws`;
+  let chosenPort = 3185;
+  for (let p = 3185; p < 3220; p++) {
+    try {
+      await startServer(p);
+      chosenPort = p;
+      break;
+    } catch (_) {}
+  }
+  baseUrl = `http://127.0.0.1:${chosenPort}`;
+  wsUrl = `ws://127.0.0.1:${chosenPort}/ws`;
 });
 
 test.after(async () => {
